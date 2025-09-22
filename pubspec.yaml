@@ -1,0 +1,27 @@
+name: water_contact_angle
+description: Advanced contact angle measurement for lab precision.
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ">=2.19.0 <3.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  image_picker: ^1.0.7
+  opencv_dart: ^1.4.3   # or omit version and use `flutter pub add opencv_dart`
+  path_provider: ^2.0.15
+  image: ^4.0.17
+  image_gallery_saver_plus: ^4.0.1
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/   # put your images here, e.g. assets/sample.jpg
