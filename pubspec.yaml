@@ -14,14 +14,39 @@ dependencies:
   path_provider: ^2.0.15
   image: ^4.0.17
   image_gallery_saver_plus: ^4.0.1
+  url_launcher: ^6.3.2
 
 
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^3.0.0
+  flutter_native_splash: ^2.4.1
+  flutter_launcher_icons: ^0.13.1
 
 flutter:
   uses-material-design: true
   assets:
     - assets/   # put your images here, e.g. assets/sample.jpg
+
+flutter_native_splash:
+  # Clean background matching app theme - no image to load faster
+  color: "#F8FAFC"   # matches AppColors.lightGray
+  android: true
+  ios: true
+  web: false
+  fullscreen: true
+  # No image - faster launch, logo appears in Flutter splash screen
+  android_12:
+    color: "#F8FAFC"
+    # No image for Android 12+ either
+
+# Launcher icon configuration. Place your PNG at assets/app_icon.png and run
+#   dart run flutter_launcher_icons
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/app_icon.png
+  adaptive_icon_background: "#F8FAFC"
+  adaptive_icon_foreground: assets/app_icon.png
+  remove_alpha_ios: true

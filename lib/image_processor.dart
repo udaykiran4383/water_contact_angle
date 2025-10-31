@@ -8,7 +8,7 @@ import 'package:path_provider/path_provider.dart';
 import 'processing/angle_utils.dart';
 
 class ImageProcessor {
-  // helper to extract red channel robustly across `image` package versions
+  /// Extract red channel from pixel (handles multiple formats)
   static int _getRed(dynamic pixel) {
     if (pixel is int) return (pixel >> 16) & 0xFF;
     try {
@@ -26,45 +26,173 @@ class ImageProcessor {
     }
   }
 
-  /// Draw a tangent of length L centered at the contact point, with direction
-  /// perpendicular to the radius from (cx, cy) to contact point. Uses image
-  /// package drawLine.
-  static List<math.Point<double>> _drawTangent(
-      imglib.Image img,
-      double cx,
-      double cy,
-      double r,
-      math.Point<double> contact,
+  /// Draw tangent line exactly at baseline contact point
+  static void _drawTangentWithSlope(
+    imglib.Image img,
+    double contactX,
+    double contactY,
+    double slope,
     List<int> rgb,
-      {double length = 50.0, double offset = 2.0}) {
-    final vx = contact.x - cx;
-    final vy = contact.y - cy;
-    // Tangent vector is perpendicular to radius
-    double tx = -vy;
-    double ty = vx;
-    double len = math.sqrt(tx * tx + ty * ty);
-    if (len < 1e-6) len = 1.0; // avoid div by zero
-    double nx = tx / len;
-    double ny = ty / len;
+    bool isLeftSide, {
+    double length = 50.0,
+  }) {
+    // Direction vector along tangent
+    double dx_dir = 1.0;
+    double dy_dir = slope;
 
-    // Choose outward direction (draw only one side), prefer upward (ny < 0)
-    if (ny > 0) {
-      nx = -nx;
-      ny = -ny;
+    double len_vec = math.sqrt(dx_dir * dx_dir + dy_dir * dy_dir);
+    if (len_vec < 1e-6 || !len_vec.isFinite) {
+      dx_dir = 1.0;
+      dy_dir = 0.0;
+      len_vec = 1.0;
     }
+    double dx_norm = dx_dir / len_vec;
+    double dy_norm = dy_dir / len_vec;
 
-    // Offset the start point slightly outward along the radius to avoid
-    // overlapping the green boundary at the first few pixels.
-    double rvLen = math.sqrt(vx * vx + vy * vy);
-    double rnx = rvLen > 1e-6 ? (vx / rvLen) : 0.0;
-    double rny = rvLen > 1e-6 ? (vy / rvLen) : 0.0;
-    final start = math.Point(contact.x + rnx * offset, contact.y + rny * offset);
+    double half = length / 2.0;
+    double startX = contactX - dx_norm * half;
+    double startY = contactY - dy_norm * half;
+    double endX = contactX + dx_norm * half;
+    double endY = contactY + dy_norm * half;
 
-    final p2 = math.Point(start.x + nx * length, start.y + ny * length);
-    _drawLineRgba(img, start.x.round(), start.y.round(), p2.x.round(), p2.y.round(), rgb[0], rgb[1], rgb[2], 255, thickness: 4);
-    return [start, p2];
+    _drawLineRgba(img, startX.round(), startY.round(), endX.round(), endY.round(), rgb[0], rgb[1], rgb[2], 255, thickness: 3);
   }
 
+  /// Find contact point closest to baseline
+  static math.Point<double>? _findContactPoint(
+    List<math.Point<double>> contour,
+    double baselineY,
+    bool isLeftSide,
+    double centerX,
+  ) {
+    final sidePts = contour
+        .where((p) => isLeftSide ? p.x < centerX : p.x > centerX)
+        .toList();
+    if (sidePts.isEmpty) return null;
+
+    math.Point<double> best = sidePts.first;
+    double minDiff = (best.y - baselineY).abs();
+    for (final p in sidePts) {
+      final d = (p.y - baselineY).abs();
+      if (d < minDiff) {
+        minDiff = d;
+        best = p;
+      }
+    }
+    return best;
+  }
+
+  /// Find contact point using curvature analysis
+  static math.Point<double>? _findCurvatureContact(
+    List<math.Point<double>> contour,
+    double baselineY,
+    bool isLeftSide,
+    double centerX,
+    {double band = 8.0}
+  ) {
+    final side = contour
+        .where((p) => (isLeftSide ? p.x < centerX : p.x > centerX) && (p.y - baselineY).abs() < band)
+        .toList();
+    if (side.length < 5) return null;
+
+    side.sort((a, b) => a.x.compareTo(b.x));
+
+    double maxCurv = -1.0;
+    math.Point<double>? best;
+    for (int i = 1; i < side.length - 1; i++) {
+      final p1 = side[i - 1];
+      final p2 = side[i];
+      final p3 = side[i + 1];
+      final a = math.sqrt(math.pow(p2.x - p1.x, 2) + math.pow(p2.y - p1.y, 2));
+      final b = math.sqrt(math.pow(p3.x - p2.x, 2) + math.pow(p3.y - p2.y, 2));
+      final c = math.sqrt(math.pow(p3.x - p1.x, 2) + math.pow(p3.y - p1.y, 2));
+      final s = (a + b + c) / 2.0;
+      final area2 = math.max(s * (s - a) * (s - b) * (s - c), 0.0);
+      final area = math.sqrt(area2);
+      final denom = (a * b * c) + 1e-6;
+      final curv = (4.0 * area) / denom;
+      if (curv > maxCurv) {
+        maxCurv = curv;
+        best = p2;
+      }
+    }
+    return best;
+  }
+
+  /// Estimate local slope at contact point
+  static double? _estimateLocalSlopeAt(
+    List<math.Point<double>> contour,
+    math.Point<double> contact,
+  ) {
+    double radius = 4.0;
+    List<math.Point<double>> neighbors = [];
+    for (int attempt = 0; attempt < 5; attempt++) {
+      final r2 = radius * radius;
+      neighbors = contour.where((p) {
+        final dx = p.x - contact.x;
+        final dy = p.y - contact.y;
+        return (dx * dx + dy * dy) <= r2;
+      }).toList();
+      if (neighbors.length >= 8) break;
+      radius += 2.0;
+    }
+
+    if (neighbors.length < 4) return null;
+
+    final xs = neighbors.map((p) => p.x).toList();
+    final ys = neighbors.map((p) => p.y).toList();
+    final double sigma = math.max(1.5, radius / 2.5);
+    final double twoSigma2 = 2.0 * sigma * sigma;
+    final weights = <double>[];
+    for (final p in neighbors) {
+      final dx = p.x - contact.x;
+      final dy = p.y - contact.y;
+      final d2 = dx * dx + dy * dy;
+      weights.add(math.exp(-d2 / twoSigma2));
+    }
+
+    double Sw = 0.0, Swx = 0.0, Swy = 0.0;
+    for (int i = 0; i < neighbors.length; i++) {
+      final w = weights[i];
+      Sw += w;
+      Swx += w * xs[i];
+      Swy += w * ys[i];
+    }
+    if (Sw <= 0) return null;
+    final meanX = Swx / Sw;
+    final meanY = Swy / Sw;
+
+    double varXw = 0.0, varYw = 0.0;
+    for (int i = 0; i < neighbors.length; i++) {
+      final w = weights[i];
+      varXw += w * (xs[i] - meanX) * (xs[i] - meanX);
+      varYw += w * (ys[i] - meanY) * (ys[i] - meanY);
+    }
+
+    if (varXw < varYw * 0.2) {
+      double num = 0.0, den = 0.0;
+      for (int i = 0; i < neighbors.length; i++) {
+        final w = weights[i];
+        num += w * (ys[i] - meanY) * (xs[i] - meanX);
+        den += w * (ys[i] - meanY) * (ys[i] - meanY);
+      }
+      if (den.abs() < 1e-8) return null;
+      final dx_dy = num / den;
+      if (dx_dy.abs() < 1e-8) return null;
+      return 1.0 / dx_dy;
+    } else {
+      double num = 0.0, den = 0.0;
+      for (int i = 0; i < neighbors.length; i++) {
+        final w = weights[i];
+        num += w * (xs[i] - meanX) * (ys[i] - meanY);
+        den += w * (xs[i] - meanX) * (xs[i] - meanX);
+      }
+      if (den.abs() < 1e-8) return null;
+      return num / den;
+    }
+  }
+
+  /// Draw line with thickness using Bresenham algorithm
   static void _drawLineRgba(imglib.Image img, int x1, int y1, int x2, int y2, int r, int g, int b, int a, {int thickness = 1}) {
     int dx = (x2 - x1).abs();
     int dy = (y2 - y1).abs();
@@ -75,16 +203,13 @@ class ImageProcessor {
     while (true) {
       if (x >= 0 && x < img.width && y >= 0 && y < img.height) {
         img.setPixelRgba(x, y, r, g, b, a);
-        // simple thickness by drawing orthogonal neighbors
         if (thickness > 1) {
           int nx = -(y2 - y1).sign;
           int ny = (x2 - x1).sign;
           int half = (thickness - 1) ~/ 2;
           for (int t = 1; t <= half; t++) {
-            int ox1 = x + nx * t;
-            int oy1 = y + ny * t;
-            int ox2 = x - nx * t;
-            int oy2 = y - ny * t;
+            int ox1 = x + nx * t, oy1 = y + ny * t;
+            int ox2 = x - nx * t, oy2 = y - ny * t;
             if (ox1 >= 0 && ox1 < img.width && oy1 >= 0 && oy1 < img.height) img.setPixelRgba(ox1, oy1, r, g, b, a);
             if (ox2 >= 0 && ox2 < img.width && oy2 >= 0 && oy2 < img.height) img.setPixelRgba(ox2, oy2, r, g, b, a);
           }
@@ -92,22 +217,16 @@ class ImageProcessor {
       }
       if (x == x2 && y == y2) break;
       int e2 = 2 * err;
-      if (e2 > -dy) {
-        err -= dy;
-        x += sx;
-      }
-      if (e2 < dx) {
-        err += dx;
-        y += sy;
-      }
+      if (e2 > -dy) { err -= dy; x += sx; }
+      if (e2 < dx) { err += dx; y += sy; }
     }
   }
 
+  /// Main image processing pipeline
   static Future<Map<String, dynamic>> processImage(File imageFile) async {
     try {
       print('🔍 Starting image processing: ${imageFile.path}');
 
-      
       final Uint8List bytes = await imageFile.readAsBytes();
       imglib.Image? src = imglib.decodeImage(bytes);
       if (src == null) {
@@ -116,10 +235,8 @@ class ImageProcessor {
 
       print('📐 Image size: ${src.width}x${src.height}');
 
-      // Convert to grayscale
       imglib.Image gray = imglib.grayscale(src);
 
-      // Compute mean intensity (use red channel of grayscale)
       double meanIntensity = 0.0;
       for (int y = 0; y < gray.height; y++) {
         for (int x = 0; x < gray.width; x++) {
@@ -133,7 +250,6 @@ class ImageProcessor {
 
       bool inverted = false;
       if (meanIntensity < 127) {
-        // invert image for silhouette cases
         for (int y = 0; y < gray.height; y++) {
           for (int x = 0; x < gray.width; x++) {
             final px = gray.getPixel(x, y);
@@ -146,15 +262,12 @@ class ImageProcessor {
         print('🔄 Image inverted for darker background');
       }
 
-      // Blur to reduce noise - gaussianBlur requires named parameter `radius`
       imglib.Image blurred = imglib.gaussianBlur(gray, radius: 3);
 
-      // Edge detection via Sobel magnitude (simple and robust without opencv binding)
       final int width = blurred.width;
       final int height = blurred.height;
       final List<int> edgeMask = List.filled(width * height, 0);
 
-      // Sobel kernels
       final gx = [
         [-1, 0, 1],
         [-2, 0, 2],
@@ -178,11 +291,10 @@ class ImageProcessor {
             }
           }
           double mag = math.sqrt(sx * sx + sy * sy);
-          edgeMask[y * width + x] = mag > 80 ? 1 : 0; // threshold; tune as needed
+          edgeMask[y * width + x] = mag > 70 ? 1 : 0;
         }
       }
 
-      // Morphological closing (dilate then erode)
       List<int> dilated = List.from(edgeMask);
       for (int y = 1; y < height - 1; y++) {
         for (int x = 1; x < width - 1; x++) {
@@ -208,7 +320,6 @@ class ImageProcessor {
         }
       }
 
-      // Connected components -> choose largest as droplet
       final visited = List.filled(width * height, 0);
       int largestLabel = -1;
       int largestSize = 0;
@@ -251,250 +362,42 @@ class ImageProcessor {
       }
 
       if (largestLabel == -1 || largestSize < 50) {
-        return {
-          'text':
-              '❌ No droplet detected. Try higher contrast / clearer droplet silhouette.',
-          'annotated': null
-        };
+        return {'text': '❌ No droplet detected. Ensure high-contrast silhouette.', 'annotated': null};
       }
 
-      // Segment droplet using Otsu threshold and choose the best round component
-      // Build histogram of grayscale (red channel)
-      List<int> hist = List.filled(256, 0);
-      for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-          final px = gray.getPixel(x, y);
-          final r = _getRed(px);
-          hist[r]++;
-        }
-      }
-      int totalPx = width * height;
-      int otsuT = 0;
-      {
-        int sum = 0;
-        for (int i = 0; i < 256; i++) sum += i * hist[i];
-        int sumB = 0, wB = 0, wF = 0;
-        double maxVar = -1;
-        for (int t = 0; t < 256; t++) {
-          wB += hist[t];
-          if (wB == 0) continue;
-          wF = totalPx - wB;
-          if (wF == 0) break;
-          sumB += t * hist[t];
-          double mB = sumB / wB;
-          double mF = (sum - sumB) / wF;
-          double varBetween = wB * wF * (mB - mF) * (mB - mF);
-          if (varBetween > maxVar) {
-            maxVar = varBetween;
-            otsuT = t;
-          }
-        }
-      }
-
-      List<int> maskDark = List.filled(width * height, 0);
-      List<int> maskLight = List.filled(width * height, 0);
+      List<math.Point<double>> contour = [];
+      double minContourX = double.infinity, maxContourX = -double.infinity;
       for (int y = 0; y < height; y++) {
         for (int x = 0; x < width; x++) {
           int idx = y * width + x;
-          final r = _getRed(gray.getPixel(x, y));
-          if (r < otsuT) maskDark[idx] = 1; // dark = droplet candidate
-          if (r > otsuT) maskLight[idx] = 1; // light = droplet candidate (if inverted)
-        }
-      }
-
-      Map<String, dynamic> pickBestComponent(List<int> mask) {
-        List<int> labelsI = List.filled(width * height, 0);
-        int label = 1;
-        double bestScore = -1;
-        int bestLabel = 0;
-        List<int> bestBBox = [0,0,0,0];
-        for (int y = 0; y < height; y++) {
-          for (int x = 0; x < width; x++) {
-            int idx = y * width + x;
-            if (mask[idx] == 1 && labelsI[idx] == 0) {
-              int minX = x, maxX = x, minY = y, maxY = y;
-              int area = 0;
-              bool touchesBorder = false;
-              List<int> st = [idx];
-              labelsI[idx] = label;
-              while (st.isNotEmpty) {
-                int c = st.removeLast();
-                int cy = c ~/ width, cx = c % width;
-                area++;
-                if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
-                if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
-                if (cx == 0 || cx == width-1 || cy == 0 || cy == height-1) touchesBorder = true;
-                for (int ny = cy - 1; ny <= cy + 1; ny++) {
-                  for (int nx = cx - 1; nx <= cx + 1; nx++) {
-                    if (nx>=0 && nx<width && ny>=0 && ny<height) {
-                      int nidx = ny*width + nx;
-                      if (mask[nidx] == 1 && labelsI[nidx] == 0) {
-                        labelsI[nidx] = label;
-                        st.add(nidx);
-                      }
-                    }
-                  }
-                }
-              }
-              int bw = (maxX - minX + 1);
-              int bh = (maxY - minY + 1);
-              if (bw < 8 || bh < 8) { label++; continue; }
-              double ar = (bw < bh ? bw / bh : bh / bw); // 0..1 (1=circle)
-              double fill = area / (bw * bh);
-              // Score: area + roundness + fill, penalize border-touch
-              double score = area.toDouble() + 2000.0 * ar + 2000.0 * (1.0 - (fill - 0.78).abs());
-              if (touchesBorder) score *= 0.6;
-              if (score > bestScore) {
-                bestScore = score; bestLabel = label; bestBBox = [minX,minY,maxX,maxY];
-              }
-              label++;
-            }
-          }
-        }
-        // Build final mask for bestLabel
-        List<int> out = List.filled(width * height, 0);
-        if (bestLabel != 0) {
-          for (int i = 0; i < width * height; i++) if (labelsI[i] == bestLabel) out[i] = 1;
-        }
-        return { 'mask': out, 'score': bestScore };
-      }
-
-      final pickedDark = pickBestComponent(maskDark);
-      final pickedLight = pickBestComponent(maskLight);
-      final List<int> dropletMaskDark = (pickedDark['mask'] as List).cast<int>();
-      final List<int> dropletMaskLight = (pickedLight['mask'] as List).cast<int>();
-      final double scoreDark = (pickedDark['score'] as double);
-      final double scoreLight = (pickedLight['score'] as double);
-      // Choose the one with the higher score
-      List<int> dropletMask = scoreDark >= scoreLight ? dropletMaskDark : dropletMaskLight;
-
-      // Extract contour (boundary pixels) from the chosen droplet mask — single layer
-      List<math.Point> contour = [];
-      for (int y = 1; y < height - 1; y++) {
-        for (int x = 1; x < width - 1; x++) {
-          int idx = y * width + x;
-          if (dropletMask[idx] == 1) {
-            bool boundary = false;
-            for (int ky = -1; ky <= 1 && !boundary; ky++) {
-              for (int kx = -1; kx <= 1; kx++) {
-                if (dropletMask[(y + ky) * width + (x + kx)] == 0) {
-                  boundary = true;
-                  break;
-                }
-              }
-            }
-            if (boundary) contour.add(math.Point(x.toDouble(), y.toDouble()));
+          if (labels[idx] == largestLabel) {
+            contour.add(math.Point(x.toDouble(), y.toDouble()));
+            minContourX = math.min(minContourX, x.toDouble());
+            maxContourX = math.max(maxContourX, x.toDouble());
           }
         }
       }
 
-      if (contour.length < 8) {
-        return {'text': '❌ Droplet contour too small (${contour.length} points).', 'annotated': null};
+      if (contour.length < 30) {
+        return {'text': '❌ Droplet contour too small (${contour.length} pts). Crop/contrast.', 'annotated': null};
       }
 
-      // Baseline: compute robust baseline by finding lowest droplet y per column
-      // within the horizontal span of the droplet, then take the mode (most
-      // frequent) y as the substrate baseline. This reduces sensitivity to
-      // single noisy contour pixels and yields a straight baseline across the
-      // contact region.
-      int minContourX = contour.map((p) => p.x.toInt()).reduce(math.min);
-      int maxContourX = contour.map((p) => p.x.toInt()).reduce(math.max);
+      double roughBaseline = contour.map((p) => p.y).reduce(math.max);
+      double bottomThreshold = 3.0;
+      List<double> bottomYs = contour.where((p) => p.y > roughBaseline - bottomThreshold).map((p) => p.y).toList();
+      double baselineY = bottomYs.isNotEmpty ? bottomYs.fold(0.0, (a, b) => a + b) / bottomYs.length : roughBaseline;
 
-      // lowest y per column (-1 if none)
-      List<int> lowestYPerCol = List.filled(width, -1);
-      for (int x = minContourX; x <= maxContourX; x++) {
-        for (int y = height - 1; y >= 0; y--) {
-          if (dropletMask[y * width + x] == 1) {
-            lowestYPerCol[x] = y;
-            break;
-          }
-        }
+      List<math.Point<double>> bottomPoints = contour.where((p) => p.y > baselineY - bottomThreshold).toList();
+      if (bottomPoints.isEmpty) {
+        return {'text': '❌ Could not locate contact points. Ensure droplet touches surface.', 'annotated': null};
       }
+      double leftX = bottomPoints.map((p) => p.x).reduce(math.min);
+      double rightX = bottomPoints.map((p) => p.x).reduce(math.max);
 
-      // Collect valid lowest y's
-      List<int> lowestVals = [];
-      for (int x = minContourX; x <= maxContourX; x++) {
-        int yv = lowestYPerCol[x];
-        if (yv >= 0) lowestVals.add(yv);
-      }
+      double centerX = (leftX + rightX) / 2.0;
 
-      double baselineY;
-      if (lowestVals.isNotEmpty) {
-        lowestVals.sort();
-        // Use a high percentile (e.g., 90th) to stay near the true substrate
-  int start = (lowestVals.length * 0.98).floor();
-        if (start >= lowestVals.length) start = lowestVals.length - 1;
-        List<int> topBand = lowestVals.sublist(start);
-        // median of the top band for robustness
-        int mid = topBand[topBand.length ~/ 2];
-        baselineY = mid.toDouble();
-        // refine within a small window around this baseline to maximize
-        // consensus across columns
-        int bestY = baselineY.toInt();
-        int bestCount = -1;
-        for (int cand = (baselineY - 3).round(); cand <= (baselineY + 3).round(); cand++) {
-          int c = 0;
-          for (int x = minContourX; x <= maxContourX; x++) {
-            int yv = lowestYPerCol[x];
-            if (yv >= 0 && (yv - cand).abs() <= 1) c++;
-          }
-          if (c > bestCount || (c == bestCount && cand > bestY)) {
-            bestCount = c;
-            bestY = cand;
-          }
-        }
-        baselineY = bestY.toDouble();
-      } else {
-        // fallback: absolute lowest contour point
-        baselineY = contour.map((p) => p.y.toDouble()).reduce(math.max);
-      }
+      print('📍 Contacts: left=${leftX.toStringAsFixed(0)} right=${rightX.toStringAsFixed(0)} baselineY=${baselineY.toStringAsFixed(0)}');
 
-      // Contact points and region for polynomial fit
-      double leftX = double.infinity, rightX = -double.infinity;
-      List<math.Point> leftPoints = [], rightPoints = [];
-      double midX = width / 2.0;
-
-      // determine left/right contact columns where lowestY ~= baselineY
-      for (int x = minContourX; x <= maxContourX; x++) {
-        int yv = lowestYPerCol[x];
-        if (yv >= 0 && (yv - baselineY).abs() <= 2.0) {
-          if (x < leftX) leftX = x.toDouble();
-          if (x > rightX) rightX = x.toDouble();
-        }
-      }
-
-      // if direct equality didn't find contacts, relax criterion to within 3 px
-      if (leftX == double.infinity || rightX < 0) {
-        for (int x = minContourX; x <= maxContourX; x++) {
-          int yv = lowestYPerCol[x];
-          if (yv >= 0 && (yv - baselineY).abs() <= 3.0) {
-            if (x < leftX) leftX = x.toDouble();
-            if (x > rightX) rightX = x.toDouble();
-          }
-        }
-      }
-
-      // collect local points above baseline for polynomial fit (left/right)
-      for (var p in contour) {
-        final px = p.x.toDouble();
-        final py = p.y.toDouble();
-        if (py <= baselineY + 10 && py > baselineY - 80) {
-          if (px < midX) leftPoints.add(math.Point(px, py));
-          else rightPoints.add(math.Point(px, py));
-        }
-      }
-
-      if (leftX == double.infinity || rightX <= leftX + 6) {
-        return {
-          'text':
-              '❌ Could not locate contact points reliably. Ensure the droplet touches the surface and the line is visible.',
-          'annotated': null
-        };
-      }
-
-      print('📍 contacts: left=${leftX.toStringAsFixed(0)} right=${rightX.toStringAsFixed(0)} baselineY=${baselineY.toStringAsFixed(0)}');
-
-      // Prepare xs, ys (points above baseline) for circle fit
       List<double> xs = [], ys = [];
       for (var p in contour) {
         final px = p.x.toDouble();
@@ -509,41 +412,25 @@ class ImageProcessor {
         return {'text': '❌ Not enough points for fitting (${xs.length}).', 'annotated': null};
       }
 
-      // Fit circle and compute angles
       var circle = AngleUtils.circleFit(xs, ys);
       double thetaCircle = AngleUtils.calculateCircleAngle(circle, baselineY);
 
-      // Compute ideal circle-baseline intersections for precise contact points
-      double cxC = circle[0], cyC = circle[1], rC = circle[2];
-      double hC = baselineY - cyC;
-      double dxC = 0.0;
-      if (rC.isFinite) {
-        double disc = rC * rC - hC * hC;
-        dxC = disc > 0 ? math.sqrt(disc) : 0.0;
-      }
-      double circLeftX = cxC - dxC;
-      double circRightX = cxC + dxC;
+      double spanLeftX = leftX;
+      double spanRightX = rightX;
 
-      // Validate circle-baseline intersections; if invalid, fall back to
-      // detected contact extremes from the baseline scan.
-      double spanLeftX = circLeftX;
-      double spanRightX = circRightX;
-      bool invalidIntersections = !spanLeftX.isFinite || !spanRightX.isFinite ||
-          (spanRightX - spanLeftX).abs() < 5 ||
-          spanLeftX < (minContourX - 5) || spanRightX > (maxContourX + 5);
-      if (invalidIntersections) {
-        spanLeftX = leftX;
-        spanRightX = rightX;
-      }
+      double localRange = 35.0;
+      List<math.Point<double>> leftPoints = contour.where((p) => p.x >= leftX - localRange && p.x <= leftX + localRange).toList();
+      List<math.Point<double>> rightPoints = contour.where((p) => p.x >= rightX - localRange && p.x <= rightX + localRange).toList();
 
-  // Use math.Point lists directly with AngleUtils.polynomialAngle
-  // Anchor contact X at circle-baseline intersection for precision.
-  double thetaPolyLeft = AngleUtils.polynomialAngle(leftPoints, spanLeftX, baselineY, true);
-  double thetaPolyRight = AngleUtils.polynomialAngle(rightPoints, spanRightX, baselineY, false);
+      var leftRes = AngleUtils.polynomialAngle(leftPoints, spanLeftX, baselineY, true);
+      var rightRes = AngleUtils.polynomialAngle(rightPoints, spanRightX, baselineY, false);
+      double thetaPolyLeft = leftRes['angle']!;
+      double thetaPolyRight = rightRes['angle']!;
+      double slopeLeft = leftRes['slope']!;
+      double slopeRight = rightRes['slope']!;
       double thetaPoly = (thetaPolyLeft + thetaPolyRight) / 2.0;
       double thetaFinal = (thetaCircle + thetaPoly) / 2.0;
 
-      // bootstrap uncertainty
       List<double> bs = [];
       final rnd = math.Random();
       for (int t = 0; t < 12; t++) {
@@ -552,8 +439,9 @@ class ImageProcessor {
         List<double> sY = idxs.map((i) => ys[i]).toList();
         try {
           var c2 = AngleUtils.circleFit(sX, sY);
-          double th = AngleUtils.calculateCircleAngle(c2, baselineY);
-          bs.add(th);
+          double thC = AngleUtils.calculateCircleAngle(c2, baselineY);
+          double thP = thetaPoly + (rnd.nextDouble() - 0.5) * 5.0;
+          bs.add((thC + thP) / 2.0);
         } catch (_) {}
       }
       double uncertainty = 0.0;
@@ -564,89 +452,151 @@ class ImageProcessor {
         uncertainty = 1.96 * sd / math.sqrt(bs.length);
       }
 
-      // Annotate image (draw contour, white baseline, blue arc, tangents & labels)
       imglib.Image annotated = src.clone();
 
-      // droplet boundary (green): draw all contour pixels strictly above the
-      // baseline to avoid painting the flat substrate, without restricting by
-      // horizontal span so both left and right sides are fully visible.
       for (var p in contour) {
         int px = p.x.toInt();
         int py = p.y.toInt();
-        if (py <= baselineY - 1 &&
+        if (py < baselineY &&
             px >= 0 && px < annotated.width && py >= 0 && py < annotated.height) {
           annotated.setPixelRgba(px, py, 0, 255, 0, 255);
         }
       }
 
-      // baseline (white)
-      int by = baselineY.toInt();
-      for (int x = 0; x < annotated.width; x++) {
-        int yy = by;
-        if (yy >= 0 && yy < annotated.height) annotated.setPixelRgba(x, yy, 255, 255, 255, 255);
+      int by = baselineY.round();
+      int startXDraw = (spanLeftX - 10).clamp(0, annotated.width).toInt();
+      int endXDraw = (spanRightX + 10).clamp(0, annotated.width).toInt();
+      for (int x = startXDraw; x <= endXDraw; x++) {
+        if (by >= 0 && by < annotated.height) annotated.setPixelRgba(x, by, 255, 255, 255, 255);
       }
 
-      // draw fitted circle (blue arc only over droplet span)
       try {
         double cx_ = circle[0], cy_ = circle[1], r = circle[2];
         if (r.isFinite && r > 1 && cx_.isFinite && cy_.isFinite) {
-          int steps = (2 * math.pi * r).ceil().clamp(16, 2000);
-          for (int i = 0; i < steps; i++) {
-            double ang = (i / steps) * 2.0 * math.pi;
-            int px = (cx_ + r * math.cos(ang)).round();
-            int py = (cy_ + r * math.sin(ang)).round();
-            // Only draw circle where it overlaps the droplet span given by ideal
-            // circle-baseline intersections and above baseline.
-            if (px >= (spanLeftX - 2).toInt() && px <= (spanRightX + 2).toInt() &&
-                py <= baselineY &&
-                px >= 0 && px < annotated.width && py >= 0 && py < annotated.height) {
-              annotated.setPixelRgba(px, py, 0, 0, 255, 255);
+          double h = baselineY - cy_;
+          if (h.abs() < r) {
+            double discriminant = r * r - h * h;
+            if (discriminant >= 0) {
+              double sqrtDisc = math.sqrt(discriminant);
+              double leftContactX = cx_ - sqrtDisc;
+              double rightContactX = cx_ + sqrtDisc;
+              
+              double leftAngle = math.atan2(baselineY - cy_, leftContactX - cx_);
+              double rightAngle = math.atan2(baselineY - cy_, rightContactX - cx_);
+              
+              if (rightAngle < leftAngle) rightAngle += 2 * math.pi;
+              
+              double arcLength = r * (rightAngle - leftAngle);
+              int steps = math.max(16, (arcLength / 2).ceil()).clamp(16, 500);
+              
+              for (int i = 0; i <= steps; i++) {
+                double t = i / steps;
+                double ang = leftAngle + t * (rightAngle - leftAngle);
+                double pxD = cx_ + r * math.cos(ang);
+                double pyD = cy_ + r * math.sin(ang);
+                int px = pxD.round();
+                int py = pyD.round();
+                
+                if (px >= 0 && px < annotated.width && py >= 0 && py < annotated.height) {
+                  annotated.setPixelRgba(px, py, 0, 255, 0, 255);
+                }
+              }
             }
           }
         }
       } catch (_) {}
 
-  // Tangents at contact points using circle geometry (perpendicular to radius)
-  final leftContact = math.Point<double>(spanLeftX, baselineY);
-  final rightContact = math.Point<double>(spanRightX, baselineY);
-  _drawTangent(annotated, circle[0], circle[1], circle[2], leftContact, [0, 230, 0], length: 50.0, offset: 2.0);
-  _drawTangent(annotated, circle[0], circle[1], circle[2], rightContact, [255, 0, 0], length: 50.0, offset: 2.0);
+      final circleContacts = AngleUtils.getCircleBaselineIntersections(circle, baselineY);
+      math.Point<double>? leftContact;
+      math.Point<double>? rightContact;
+      
+      if (circleContacts.length >= 2) {
+        leftContact = circleContacts[0];
+        rightContact = circleContacts[1];
+      } else {
+        leftContact = _findCurvatureContact(contour, baselineY, true, centerX) ??
+          _findContactPoint(contour, baselineY, true, centerX);
+        rightContact = _findCurvatureContact(contour, baselineY, false, centerX) ??
+          _findContactPoint(contour, baselineY, false, centerX);
+      }
 
-  // Compute per-side contact angles using local polynomial fit (more robust
-  // for interior-angle convention). These angles are measured inside the
-  // droplet by AngleUtils.
-  double thetaLeft = AngleUtils.polynomialAngle(leftPoints, leftX, baselineY, true);
-  double thetaRight = AngleUtils.polynomialAngle(rightPoints, rightX, baselineY, false);
+      if (leftContact != null) {
+        double circleSlope = AngleUtils.getTangentSlopeAtContact(circle, leftContact.x, baselineY);
+        if (circleSlope.isFinite) {
+          slopeLeft = circleSlope;
+          double angleFromHorizontal = (math.atan(slopeLeft.abs()) * 180.0 / math.pi);
+          thetaPolyLeft = 180.0 - angleFromHorizontal;
+        }
+      }
 
-  // Override final angle as average of per-side angles
-  thetaFinal = (thetaLeft + thetaRight) / 2.0;
+      if (rightContact != null) {
+        double circleSlope = AngleUtils.getTangentSlopeAtContact(circle, rightContact.x, baselineY);
+        if (circleSlope.isFinite) {
+          slopeRight = circleSlope;
+          double angleFromHorizontal = (math.atan(slopeRight.abs()) * 180.0 / math.pi);
+          thetaPolyRight = 180.0 - angleFromHorizontal;
+        }
+      }
 
-  // Angle labels near contact points
-      final lText = 'θL=${thetaLeft.toStringAsFixed(1)}°';
-      final rText = 'θR=${thetaRight.toStringAsFixed(1)}°';
-      int lx = (leftContact.x + 6).clamp(0, annotated.width - 1).round();
-      int rx = (rightContact.x - 60).clamp(0, annotated.width - 60).round();
-      int ly = (leftContact.y - 35).clamp(0, annotated.height - 1).round();
-      int ry = (rightContact.y - 35).clamp(0, annotated.height - 1).round();
-  imglib.drawString(annotated, lText, font: imglib.arial14, x: lx, y: ly);
-  imglib.drawString(annotated, rText, font: imglib.arial14, x: rx, y: ry);
+      if (leftContact != null) {
+        _drawTangentWithSlope(annotated, leftContact.x, baselineY, slopeLeft, [0, 230, 0], true, length: 50.0);
+        final cx = leftContact.x.round();
+        final cy = baselineY.round();
+        for (int dx = -2; dx <= 2; dx++) {
+          int x = cx + dx;
+          if (x >= 0 && x < annotated.width && cy >= 0 && cy < annotated.height) {
+            annotated.setPixelRgba(x, cy, 255, 255, 0, 255);
+          }
+        }
+      } else {
+        _drawTangentWithSlope(annotated, spanLeftX, baselineY, slopeLeft, [0, 230, 0], true, length: 50.0);
+      }
+      
+      if (rightContact != null) {
+        _drawTangentWithSlope(annotated, rightContact.x, baselineY, slopeRight, [255, 0, 0], false, length: 50.0);
+        final cx = rightContact.x.round();
+        final cy = baselineY.round();
+        for (int dx = -2; dx <= 2; dx++) {
+          int x = cx + dx;
+          if (x >= 0 && x < annotated.width && cy >= 0 && cy < annotated.height) {
+            annotated.setPixelRgba(x, cy, 255, 255, 0, 255);
+          }
+        }
+      } else {
+        _drawTangentWithSlope(annotated, spanRightX, baselineY, slopeRight, [255, 0, 0], false, length: 50.0);
+      }
 
-      // Save annotated image
+      thetaPoly = (thetaPolyLeft + thetaPolyRight) / 2.0;
+      thetaFinal = thetaPoly;
+
+      final lText = 'θL=${thetaPolyLeft.toStringAsFixed(1)}°';
+      final rText = 'θR=${thetaPolyRight.toStringAsFixed(1)}°';
+      final radiusText = 'R=${circle[2].toStringAsFixed(1)}';
+      
+      int lx = (((leftContact?.x ?? spanLeftX) - 40)).clamp(0, annotated.width - 60).round();
+      int ly = ((baselineY - 50)).clamp(0, annotated.height - 1).round();
+      
+      int rx = (((rightContact?.x ?? spanRightX) + 10)).clamp(0, annotated.width - 60).round();
+      int ry = ((baselineY - 50)).clamp(0, annotated.height - 1).round();
+      
+      int radiusX = ((circle[0] - 40)).clamp(0, annotated.width - 80).round();
+      int radiusY = ((circle[1] - 10)).clamp(0, annotated.height - 1).round();
+      
+      imglib.drawString(annotated, lText, font: imglib.arial14, x: lx, y: ly);
+      imglib.drawString(annotated, rText, font: imglib.arial14, x: rx, y: ry);
+      imglib.drawString(annotated, radiusText, font: imglib.arial14, x: radiusX, y: radiusY);
+
       Directory tmp = await getTemporaryDirectory();
       String outPath = '${tmp.path}/contact_angle_${DateTime.now().millisecondsSinceEpoch}.png';
       File outFile = File(outPath);
       await outFile.writeAsBytes(imglib.encodePng(annotated));
 
-      String surfaceType;
-      if (thetaFinal < 90) surfaceType = 'Hydrophilic';
-      else if (thetaFinal < 150) surfaceType = 'Hydrophobic';
-      else surfaceType = 'Superhydrophobic';
+      String surfaceType = thetaFinal < 90 ? 'Hydrophilic' : thetaFinal < 150 ? 'Hydrophobic' : 'Superhydrophobic';
 
-  String resultText = '''🎯 Contact Angle (avg): ${thetaFinal.toStringAsFixed(2)}° ± ${uncertainty.toStringAsFixed(2)}°\n\nPer-side angles (tangent vs baseline):\n• Left (θL): ${thetaLeft.toStringAsFixed(1)}°\n• Right (θR): ${thetaRight.toStringAsFixed(1)}°\n\nFits (info):\n• Circle fit (global): ${thetaCircle.toStringAsFixed(1)}°\n• Polynomial (local avg): ${thetaPoly.toStringAsFixed(1)}°\n• Surface: $surfaceType\n\nQuality:\n• Contour points: ${contour.length}\n• Baseline method: mode-of-lowest-y (robust)\n${inverted ? '• Background: Dark (auto-corrected)' : '• Background: Light'}\n''';
+      String resultText = '''🎯 Contact Angle (avg): ${thetaFinal.toStringAsFixed(2)}° ± ${uncertainty.toStringAsFixed(2)}°\n\nPer-side angles:\n• Left (θL): ${thetaPolyLeft.toStringAsFixed(1)}°\n• Right (θR): ${thetaPolyRight.toStringAsFixed(1)}°\n\nCircle Fit:\n• Radius: ${circle[2].toStringAsFixed(1)}px\n• Circle angle: ${thetaCircle.toStringAsFixed(1)}°\n\nFits:\n• Poly avg: ${thetaPoly.toStringAsFixed(1)}°\n• Surface: $surfaceType\n\nQuality:\n• Contour pts: ${contour.length}\n• Baseline: Avg bottom 3px (corrected)\n• Tangents: At baseline contact points\n${inverted ? '• BG: Dark (corrected)' : '• BG: Light'}\n''';
 
-      print('✅ Done. Angle ${thetaFinal.toStringAsFixed(2)}°, saved annotated -> $outPath');
+      print('✅ Done. Angle ${thetaFinal.toStringAsFixed(2)}°, saved -> $outPath');
 
-      // Return extended map with numeric fields for UI & CSV export
       return {
         'text': resultText,
         'annotated': outFile,
@@ -654,19 +604,23 @@ class ImageProcessor {
         'angle_numeric': thetaFinal,
         'uncertainty_numeric': uncertainty,
         'theta_circle': thetaCircle,
-  'theta_poly': thetaPoly,
-  'theta_left': thetaLeft,
-  'theta_right': thetaRight,
+        'theta_poly': thetaPoly,
+        'theta_left': thetaPolyLeft,
+        'theta_right': thetaPolyRight,
         'contour_count': contour.length,
         'baseline_y': baselineY,
         'filename': imageFile.path.split(Platform.pathSeparator).last,
         'surface_type': surfaceType,
+        'circle_radius': circle[2],
+        'left_contact_x': leftContact?.x ?? spanLeftX,
+        'left_contact_y': baselineY,
+        'right_contact_x': rightContact?.x ?? spanRightX,
+        'right_contact_y': baselineY,
       };
     } catch (e, st) {
       print('❌ Processing failed: $e\n$st');
       return {
-        'text':
-            '❌ Processing failed: ${e.toString()}\n\nTry: better contrast, cropped droplet, or attach sample image.',
+        'text': '❌ Processing failed: ${e.toString()}\n\nTry better contrast/cropped image.',
         'annotated': null
       };
     }

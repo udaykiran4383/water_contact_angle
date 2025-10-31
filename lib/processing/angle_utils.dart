@@ -1,106 +1,189 @@
-// lib/processing/angle_utils.dart
 import 'dart:math' as math;
 
-/// Utility methods for fitting and contact-angle calculation.
-/// Uses dart:math Point (math.Point) to avoid binding-specific types.
-class AngleUtils {
-  /// Circle fitting using Kåsa least-squares method
-  /// Fits points to equation: (x - cx)² + (y - cy)² = r²
-  static List<double> circleFit(List<double> xs, List<double> ys) {
-    int n = xs.length;
-    if (n < 3) throw Exception('Need at least 3 points for circle fitting');
+/// Result class for circle fitting
+class CircleFitResult {
+  final double centerX;
+  final double centerY;
+  final double radius;
 
-    // Initialize sums
-    double sumX = 0, sumY = 0, sumX2 = 0, sumY2 = 0, sumXY = 0;
-    double sumX3 = 0, sumY3 = 0, sumX2Y = 0, sumXY2 = 0;
-    double sumZ = 0, sumXZ = 0, sumYZ = 0;
+  CircleFitResult({
+    required this.centerX,
+    required this.centerY,
+    required this.radius,
+  });
+
+  /// Convert to List<double> for compatibility
+  List<double> toList() => [centerX, centerY, radius];
+}
+
+/// Result class for angle calculation
+class AngleResult {
+  final double angle;
+  final double slope;
+  final double intercept;
+
+  AngleResult({
+    required this.angle,
+    required this.slope,
+    required this.intercept,
+  });
+}
+
+/// Unified angle utilities for contact angle measurement
+class AngleUtils {
+  /// Fit circle to droplet contour using least squares (Kåsa method)
+  /// Returns single consistent radius (average of all points)
+  /// Returns List<double> [cx, cy, radius] for compatibility with image_processor
+  static List<double> circleFit(List<double> xs, List<double> ys) {
+    if (xs.length < 3 || ys.length < 3) {
+      return [0.0, 0.0, 0.0];
+    }
+
+    int n = xs.length;
+    double sumX = 0, sumY = 0, sumX2 = 0, sumY2 = 0;
+    double sumXY = 0, sumX3 = 0, sumY3 = 0, sumX2Y = 0, sumXY2 = 0;
 
     for (int i = 0; i < n; i++) {
-      double x = xs[i], y = ys[i];
-      double x2 = x * x, y2 = y * y;
-      double z = x2 + y2;
+      double x = xs[i];
+      double y = ys[i];
       sumX += x;
       sumY += y;
-      sumX2 += x2;
-      sumY2 += y2;
+      sumX2 += x * x;
+      sumY2 += y * y;
       sumXY += x * y;
-      sumX3 += x * x2;
-      sumY3 += y * y2;
-      sumX2Y += x2 * y;
-      sumXY2 += x * y2;
-      sumZ += z;
-      sumXZ += x * z;
-      sumYZ += y * z;
+      sumX3 += x * x * x;
+      sumY3 += y * y * y;
+      sumX2Y += x * x * y;
+      sumXY2 += x * y * y;
     }
 
-    // Build normal equations matrix A and vector b
-    List<List<double>> A = [
-      [sumX2, sumXY, sumX],
-      [sumXY, sumY2, sumY],
-      [sumX, sumY, n.toDouble()],
-    ];
-    List<double> b = [sumXZ, sumYZ, sumZ];
+    double A = n * sumX2 - sumX * sumX;
+    double B = n * sumXY - sumX * sumY;
+    double C = n * sumY2 - sumY * sumY;
+    double D = 0.5 * (n * sumX3 + n * sumXY2 - sumX * sumX2 - sumX * sumY2);
+    double E = 0.5 * (n * sumX2Y + n * sumY3 - sumY * sumX2 - sumY * sumY2);
 
-    try {
-      List<double> sol = _solveLinearSystem(A, b);
-      double a = sol[0], bParam = sol[1], c = sol[2];
-
-      double cx = -a / 2.0;
-      double cy = -bParam / 2.0;
-      double r = math.sqrt((a * a / 4.0) + (bParam * bParam / 4.0) - c);
-
-      if (!(r.isFinite && r > 0)) throw Exception('Invalid circle radius: $r');
-
-      return [cx, cy, r];
-    } catch (e) {
-      // fallback: bounding-box-based approximate circle
-      double minX = xs.reduce(math.min), maxX = xs.reduce(math.max);
-      double minY = ys.reduce(math.min), maxY = ys.reduce(math.max);
-      double cx = (minX + maxX) / 2.0;
-      double cy = (minY + maxY) / 2.0;
-      double r = math.sqrt(math.pow((maxX - minX) / 2.0, 2) + math.pow((maxY - minY) / 2.0, 2));
-      return [cx, cy, r];
+    double denom = A * C - B * B;
+    if (denom.abs() < 1e-10) {
+      return [0.0, 0.0, 0.0];
     }
+
+    double centerX = (D * C - B * E) / denom;
+    double centerY = (A * E - B * D) / denom;
+
+    // This ensures ONE consistent radius value, not different values per side
+    double radiusSum = 0;
+    for (int i = 0; i < n; i++) {
+      double dx = xs[i] - centerX;
+      double dy = ys[i] - centerY;
+      radiusSum += math.sqrt(dx * dx + dy * dy);
+    }
+    double radius = radiusSum / n;
+
+    if (!radius.isFinite || radius <= 0) {
+      return [0.0, 0.0, 0.0];
+    }
+
+    return [centerX, centerY, radius];
   }
 
-  /// Calculate contact angle from circle geometry.
-  /// θ = 180° - α, where cos(α) = (baselineY - cy) / r
+  /// Calculate contact angle from circle geometry
+  /// Fixed tangent calculation at baseline contact points
   static double calculateCircleAngle(List<double> circle, double baselineY) {
     double cx = circle[0], cy = circle[1], r = circle[2];
-    double h = baselineY - cy; // positive if baseline below center
-    double cosAlpha = h / r;
-    cosAlpha = math.max(-1.0, math.min(1.0, cosAlpha));
-    double alphaRad = math.acos(cosAlpha);
-    double alphaDeg = alphaRad * 180.0 / math.pi;
-    double contactAngle = 180.0 - alphaDeg;
+    
+    if (r == 0 || !r.isFinite) return 0;
+
+    // Distance from circle center to baseline
+    double h = baselineY - cy;
+
+    // Check if circle intersects baseline
+    if (h.abs() >= r) {
+      return 0;
+    }
+
+    // Calculate contact points where circle meets baseline
+    // Circle: (x - cx)² + (y - cy)² = r²
+    // At baseline: (x - cx)² + h² = r²
+    double discriminant = r * r - h * h;
+    if (discriminant < 0) return 0;
+
+    double sqrtDisc = math.sqrt(discriminant);
+    double leftContactX = cx - sqrtDisc;
+    double rightContactX = cx + sqrtDisc;
+
+    // Radius vector at left contact: (leftContactX - cx, baselineY - cy) = (-sqrtDisc, h)
+    // Tangent perpendicular to radius: slope = -(-sqrtDisc) / h = sqrtDisc / h
+    double leftSlope = sqrtDisc / (h + 1e-8);
+    
+    // Radius vector at right contact: (rightContactX - cx, baselineY - cy) = (sqrtDisc, h)
+    // Tangent perpendicular to radius: slope = -(sqrtDisc) / h = -sqrtDisc / h
+    double rightSlope = -sqrtDisc / (h + 1e-8);
+
+    // Convert slope to contact angle
+    double leftAngle = _slopeToContactAngle(leftSlope, true);
+    double rightAngle = _slopeToContactAngle(rightSlope, false);
+
+    // Return average angle
+    double avgAngle = (leftAngle + rightAngle) / 2.0;
+    return math.max(0.0, math.min(180.0, avgAngle));
+  }
+
+  /// Fixed slope to contact angle conversion
+  /// Interior contact angle is measured from the baseline upward
+  /// For a tangent line with slope m, the angle from horizontal is atan(|m|)
+  /// Interior contact angle = 180° - angle_from_horizontal for left side
+  /// Interior contact angle = angle_from_horizontal for right side
+  static double _slopeToContactAngle(double slope, bool isLeftSide) {
+    if (!slope.isFinite) return 90.0;
+    
+    // Angle from horizontal (always positive)
+    double angleFromHorizontal = math.atan(slope.abs()) * 180.0 / math.pi;
+    
+    // Interior contact angle measured from baseline
+    // Left side: angle increases as we go up-left (180° - angle_from_horizontal)
+    // Right side: angle increases as we go up-right (angle_from_horizontal)
+    double contactAngle = isLeftSide 
+        ? 180.0 - angleFromHorizontal 
+        : angleFromHorizontal;
+    
     return math.max(0.0, math.min(180.0, contactAngle));
   }
 
-  /// Local polynomial fitting for tangent calculation at contact point.
-  /// Accepts dart:math Points.
-  static double polynomialAngle(List<math.Point> points, double contactX, double contactY, bool isLeftSide) {
+  /// Fit polynomial to contour and calculate angle at contact point
+  /// Improved to ensure tangent is drawn exactly at baseline
+  static Map<String, double> polynomialAngle(
+    List<math.Point<double>> points,
+    double contactX,
+    double baselineY,
+    bool isLeftSide,
+  ) {
     if (points.length < 4) {
-      // Not enough points -> return default 90°
-      return 90.0;
+      return {'angle': 90.0, 'slope': 0.0, 'intercept': 0.0};
     }
 
     try {
-      double minX = points.map((p) => p.x.toDouble()).reduce(math.min);
-      double maxX = points.map((p) => p.x.toDouble()).reduce(math.max);
-      double minY = points.map((p) => p.y.toDouble()).reduce(math.min);
-      double maxY = points.map((p) => p.y.toDouble()).reduce(math.max);
+      // Extract coordinates
+      List<double> xs = points.map((p) => p.x).toList();
+      List<double> ys = points.map((p) => p.y).toList();
+
+      double minX = xs.reduce(math.min);
+      double maxX = xs.reduce(math.max);
+      double minY = ys.reduce(math.min);
+      double maxY = ys.reduce(math.max);
 
       double deltaX = maxX - minX;
       double deltaY = maxY - minY;
 
+      // Decide whether to fit x(y) or y(x) based on contour orientation
       bool fitXasFunctionOfY = deltaY > 1.2 * deltaX;
 
       List<double> independent = [];
       List<double> dependent = [];
 
-      for (var p in points) {
-        double x = p.x.toDouble();
-        double y = p.y.toDouble();
+      for (int i = 0; i < points.length; i++) {
+        double x = xs[i];
+        double y = ys[i];
         if (fitXasFunctionOfY) {
           independent.add(y);
           dependent.add(x);
@@ -110,98 +193,278 @@ class AngleUtils {
         }
       }
 
-      // cubic polynomial fit
+      // Fit cubic polynomial
       List<double> coeffs = _polynomialFit(independent, dependent, 3);
 
-      double contactIndependent = fitXasFunctionOfY ? contactY : contactX;
-
+      // Calculate slope at contact point
+      double contactIndependent = fitXasFunctionOfY ? baselineY : contactX;
+      
       double b = coeffs.length > 1 ? coeffs[1] : 0.0;
       double c = coeffs.length > 2 ? coeffs[2] : 0.0;
       double d = coeffs.length > 3 ? coeffs[3] : 0.0;
 
-      double slope = b + 2.0 * c * contactIndependent + 3.0 * d * contactIndependent * contactIndependent;
+      double slopeIndependent = b + 2.0 * c * contactIndependent + 3.0 * d * contactIndependent * contactIndependent;
 
       double dy_dx;
       if (fitXasFunctionOfY) {
-        dy_dx = 1.0 / (slope + 1e-8);
+        dy_dx = 1.0 / (slopeIndependent + 1e-8);
       } else {
-        dy_dx = slope;
+        dy_dx = slopeIndependent;
       }
 
-      double angleRad = math.atan(dy_dx.abs());
-      double angleDeg = angleRad * 180.0 / math.pi;
-
-      bool isInteriorAngle = (isLeftSide && dy_dx > 0) || (!isLeftSide && dy_dx < 0);
-
-      double finalAngle = isInteriorAngle ? angleDeg : 180.0 - angleDeg;
-      finalAngle = math.max(0.0, math.min(180.0, finalAngle));
-      return finalAngle;
+      double finalAngle = _slopeToContactAngle(dy_dx, isLeftSide);
+      return {'angle': finalAngle, 'slope': dy_dx, 'intercept': 0.0};
     } catch (e) {
-      return 90.0;
+      return {'angle': 90.0, 'slope': 0.0, 'intercept': 0.0};
     }
   }
 
-  /// Least-squares polynomial fitting using normal equations
+  /// Fit polynomial using least squares method
+  /// Solves normal equations for polynomial coefficients
   static List<double> _polynomialFit(List<double> x, List<double> y, int degree) {
     int n = x.length;
-    int m = degree + 1;
-    if (n < m) throw Exception('Need at least $m points for degree $degree polynomial');
+    if (n < degree + 1) return List.filled(degree + 1, 0.0);
 
-    List<List<double>> ATA = List.generate(m, (_) => List.filled(m, 0.0));
-    List<double> ATy = List.filled(m, 0.0);
+    // Build Vandermonde matrix and solve normal equations
+    List<List<double>> A = List.generate(degree + 1, (_) => List.filled(degree + 1, 0.0));
+    List<double> b = List.filled(degree + 1, 0.0);
 
-    for (int k = 0; k < n; k++) {
-      double xPow = 1.0;
-      for (int i = 0; i < m; i++) {
-        double xi = xPow;
-        double yk = y[k];
-        ATy[i] += xi * yk;
-
-        double xPowJ = 1.0;
-        for (int j = 0; j < m; j++) {
-          ATA[i][j] += xi * xPowJ;
-          xPowJ *= x[k];
+    for (int i = 0; i <= degree; i++) {
+      for (int j = 0; j <= degree; j++) {
+        double sum = 0;
+        for (int k = 0; k < n; k++) {
+          sum += math.pow(x[k], i + j).toDouble();
         }
-        xPow *= x[k];
+        A[i][j] = sum;
       }
+      double sum = 0;
+      for (int k = 0; k < n; k++) {
+        sum += y[k] * math.pow(x[k], i).toDouble();
+      }
+      b[i] = sum;
     }
 
-    return _solveLinearSystem(ATA, ATy);
+    // Solve using Gaussian elimination
+    return _gaussianElimination(A, b);
   }
 
-  /// Solve linear system Ax = b via Gaussian elimination with partial pivoting
-  static List<double> _solveLinearSystem(List<List<double>> A, List<double> b) {
+  /// Gaussian elimination for solving linear systems
+  /// Improved numerical stability with partial pivoting
+  static List<double> _gaussianElimination(List<List<double>> A, List<double> b) {
     int n = A.length;
-    if (A.any((row) => row.length != n) || b.length != n) {
-      throw Exception('Matrix dimension mismatch');
-    }
+    List<List<double>> aug = List.generate(n, (i) => [...A[i], b[i]]);
 
-    List<List<double>> M = List.generate(n, (i) => List.from(A[i])..add(b[i]));
-
+    // Forward elimination with partial pivoting
     for (int i = 0; i < n; i++) {
-      int pivot = i;
-      for (int r = i + 1; r < n; r++) {
-        if (M[r][i].abs() > M[pivot][i].abs()) pivot = r;
+      // Find pivot
+      int maxRow = i;
+      for (int k = i + 1; k < n; k++) {
+        if (aug[k][i].abs() > aug[maxRow][i].abs()) {
+          maxRow = k;
+        }
       }
-      if (pivot != i) {
-        var tmp = M[i];
-        M[i] = M[pivot];
-        M[pivot] = tmp;
-      }
-      if (M[i][i].abs() < 1e-12) throw Exception('Singular matrix');
 
-      for (int r = i + 1; r < n; r++) {
-        double factor = M[r][i] / M[i][i];
-        for (int c = i; c <= n; c++) M[r][c] -= factor * M[i][c];
+      // Swap rows
+      var temp = aug[i];
+      aug[i] = aug[maxRow];
+      aug[maxRow] = temp;
+
+      // Check for singular matrix
+      if (aug[i][i].abs() < 1e-10) {
+        return List.filled(n, 0.0);
+      }
+
+      // Eliminate column
+      for (int k = i + 1; k < n; k++) {
+        double factor = aug[k][i] / aug[i][i];
+        for (int j = i; j <= n; j++) {
+          aug[k][j] -= factor * aug[i][j];
+        }
       }
     }
 
+    // Back substitution
     List<double> x = List.filled(n, 0.0);
     for (int i = n - 1; i >= 0; i--) {
-      double s = 0.0;
-      for (int j = i + 1; j < n; j++) s += M[i][j] * x[j];
-      x[i] = (M[i][n] - s) / M[i][i];
+      x[i] = aug[i][n];
+      for (int j = i + 1; j < n; j++) {
+        x[i] -= aug[i][j] * x[j];
+      }
+      x[i] /= aug[i][i];
     }
+
     return x;
+  }
+
+  /// Get circle arc points constrained to above baseline
+  /// Only shows the arc portion that's relevant for contact angle
+  static List<math.Point<double>> getConstrainedCircleArc(
+    List<double> circle,
+    double baselineY,
+    {int numPoints = 100}
+  ) {
+    List<math.Point<double>> arcPoints = [];
+    
+    double cx = circle[0], cy = circle[1], r = circle[2];
+    if (r == 0 || !r.isFinite) return arcPoints;
+
+    // Find contact points where circle meets baseline
+    double h = baselineY - cy;
+    if (h.abs() >= r) return arcPoints;
+
+    double discriminant = r * r - h * h;
+    if (discriminant < 0) return arcPoints;
+
+    double sqrtDisc = math.sqrt(discriminant);
+    double leftContactX = cx - sqrtDisc;
+    double rightContactX = cx + sqrtDisc;
+
+    // Calculate angles for contact points
+    double leftAngle = math.atan2(baselineY - cy, leftContactX - cx);
+    double rightAngle = math.atan2(baselineY - cy, rightContactX - cx);
+
+    // Ensure we go counterclockwise from left to right
+    if (rightAngle < leftAngle) rightAngle += 2 * math.pi;
+
+    // Generate arc points from left contact to right contact (above baseline)
+    for (int i = 0; i <= numPoints; i++) {
+      double t = i / numPoints;
+      double angle = leftAngle + t * (rightAngle - leftAngle);
+      double x = cx + r * math.cos(angle);
+      double y = cy + r * math.sin(angle);
+
+      // Only include points above baseline
+      if (y <= baselineY + 1.0) {
+        arcPoints.add(math.Point(x, y));
+      }
+    }
+
+    return arcPoints;
+  }
+
+  /// Get tangent line at exact baseline contact point
+  /// Ensures tangent starts and ends at correct positions
+  static Map<String, double> getTangentLine(
+    double contactX,
+    double slope,
+    double baselineY,
+    double lineLength,
+  ) {
+    // Normalize direction vector
+    double dx = 1.0;
+    double dy = slope;
+    double len = math.sqrt(dx * dx + dy * dy);
+    if (len < 1e-6 || !len.isFinite) {
+      dx = 1.0;
+      dy = 0.0;
+      len = 1.0;
+    }
+    double dx_norm = dx / len;
+    double dy_norm = dy / len;
+
+    double half = lineLength / 2.0;
+    double startX = contactX - dx_norm * half;
+    double startY = baselineY - dy_norm * half;
+    double endX = contactX + dx_norm * half;
+    double endY = baselineY + dy_norm * half;
+
+    return {
+      'startX': startX,
+      'startY': startY,
+      'endX': endX,
+      'endY': endY,
+      'contactX': contactX,
+      'contactY': baselineY,
+    };
+  }
+
+  /// Validate contact angle measurement
+  static bool isValidAngle(double angle) {
+    return angle > 0 && angle < 180 && angle.isFinite;
+  }
+
+  /// Calculate measurement confidence (0-1)
+  static double calculateConfidence(
+    List<double> xs,
+    List<double> ys,
+    double baselineY,
+  ) {
+    if (xs.isEmpty) return 0;
+
+    // Check contour span
+    double minX = xs.reduce((a, b) => a < b ? a : b);
+    double maxX = xs.reduce((a, b) => a > b ? a : b);
+    double span = maxX - minX;
+
+    // Check baseline proximity
+    int nearBaseline = 0;
+    for (double y in ys) {
+      if ((y - baselineY).abs() < 5) {
+        nearBaseline++;
+      }
+    }
+
+    double baselineProximity = nearBaseline / ys.length;
+    double spanConfidence = math.min(1.0, span / 100);
+    double confidence = (spanConfidence + baselineProximity) / 2;
+
+    return confidence;
+  }
+
+  /// Get circle-baseline intersection points (contact points)
+  /// Added method to find exact contact points where circle meets baseline
+  static List<math.Point<double>> getCircleBaselineIntersections(
+    List<double> circle,
+    double baselineY,
+  ) {
+    List<math.Point<double>> intersections = [];
+    
+    double cx = circle[0], cy = circle[1], r = circle[2];
+    if (r == 0 || !r.isFinite) return intersections;
+
+    // Distance from circle center to baseline
+    double h = baselineY - cy;
+
+    // Check if circle intersects baseline
+    if (h.abs() >= r) return intersections;
+
+    double discriminant = r * r - h * h;
+    if (discriminant < 0) return intersections;
+
+    double sqrtDisc = math.sqrt(discriminant);
+    double leftContactX = cx - sqrtDisc;
+    double rightContactX = cx + sqrtDisc;
+
+    intersections.add(math.Point(leftContactX, baselineY));
+    intersections.add(math.Point(rightContactX, baselineY));
+
+    return intersections;
+  }
+
+  /// Fixed tangent slope calculation at circle-baseline contact point
+  /// Tangent is perpendicular to the radius vector at the contact point
+  static double getTangentSlopeAtContact(
+    List<double> circle,
+    double contactX,
+    double baselineY,
+  ) {
+    double cx = circle[0], cy = circle[1], r = circle[2];
+    
+    if (r == 0 || !r.isFinite) return 0.0;
+
+    // Vector from center to contact point (radius vector)
+    double radiusX = contactX - cx;
+    double radiusY = baselineY - cy;
+
+    // Tangent is perpendicular to radius
+    // If radius vector is (rx, ry), perpendicular vector is (-ry, rx)
+    // Radius slope = ry/rx, so tangent slope = -rx/ry (perpendicular)
+    if (radiusY.abs() < 1e-8) {
+      return 0.0; // Horizontal radius -> vertical tangent (infinite slope)
+    }
+
+    // Tangent slope = -radiusX / radiusY (perpendicular to radius)
+    double tangentSlope = -radiusX / radiusY;
+    return tangentSlope;
   }
 }
