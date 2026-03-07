@@ -1,0 +1,22 @@
+@@ -7,6 +7,9 @@
+ import 'package:image/image.dart' as imglib;
+ import 'dart:typed_data';
+ import 'dart:math' as math;
++import '../lib/processing/angle_utils.dart';
++import '../lib/processing/sub_pixel_edge.dart';
++import '../lib/processing/young_laplace.dart';
+ 
+ class HeadlessImageProcessor {
+   static const double _maxBaselineTiltDeg = 15.0;
+@@ -1913,8 +1918,8 @@
+       ? (rightXGeom.isFinite
+           ? 0.65 * rightXZero + 0.35 * rightXGeom
+           : rightXZero)
+       : rightXGeom;
+-      
+-  final leftX = leftXGeom.isFinite && (inflectionLeftX - leftXRaw).abs() > 4.0 ? inflectionLeftX : leftXRaw;
+-  final rightX = rightXGeom.isFinite && (inflectionRightX - rightXRaw).abs() > 4.0 ? inflectionRightX : rightXRaw;
++      
++  final leftX = leftXGeom.isFinite && (inflectionLeftX - leftXRaw).abs() > 4.0 ? inflectionLeftX : leftXRaw;
++  final rightX = rightXGeom.isFinite && (inflectionRightX - rightXRaw).abs() > 4.0 ? inflectionRightX : rightXRaw;
+ 

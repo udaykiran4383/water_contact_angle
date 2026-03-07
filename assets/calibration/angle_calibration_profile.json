@@ -1,0 +1,43 @@
+{
+  "model": "piecewise_linear_v1",
+  "slope": 0.6,
+  "intercept": 35.0,
+  "max_correction_deg": 22.831753733956084,
+  "residual_std_deg": 5.13713639378251,
+  "source": "rig_calibrated_piecewise",
+  "knots": [
+    75.0,
+    90.0,
+    110.01660980096199,
+    112.46788523402796,
+    115.96228405720008,
+    119.55953249865405,
+    125.62734893043475,
+    140.62734893043475
+  ],
+  "values": [
+    109.5695,
+    126.337,
+    117.0695,
+    112.088,
+    122.9255,
+    131.454,
+    133.06,
+    138.954
+  ],
+  "created_at": "2026-03-04T22:22:24.317486",
+  "n_samples": 10,
+  "source_csv": "PFOTES 2/output.csv",
+  "source_images": "PFOTES 2",
+  "mae_before_deg": 10.340333465952629,
+  "mae_after_deg": 3.2512131027163464,
+  "mae_loocv_deg": 6.553400269984766,
+  "rmse_after_deg": 5.13713639378251,
+  "model_comparison": {
+    "affine_mae": 21.056333851488223,
+    "affine_loocv": 20.721937161241847,
+    "piecewise_mae": 3.2512131027163464,
+    "piecewise_loocv": 6.553400269984766,
+    "chosen": "piecewise_linear"
+  }
+}

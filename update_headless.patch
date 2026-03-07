@@ -1,0 +1,54 @@
+--- test_scripts/headless_image_processor.dart
++++ test_scripts/headless_image_processor.dart
+@@ -7,6 +7,9 @@
+ import 'package:image/image.dart' as imglib;
+ import 'dart:typed_data';
+ import 'dart:math' as math;
++import '../lib/processing/angle_utils.dart';
++import '../lib/processing/sub_pixel_edge.dart';
++import '../lib/processing/young_laplace.dart';
+ 
+ class HeadlessImageProcessor {
+   static const double _maxBaselineTiltDeg = 15.0;
+@@ -321,6 +324,8 @@
+       // detected here will be near-horizontal.
+       var baselineResult = _detectBaseline(contour);
+       double baselineAngle = (baselineResult['angle'] as num).toDouble();
++      bool isSlopedSurface = surfaceMode == 'SLOPED_SURFACE';
++      double appliedRotationDeg = substrateSlopeDeg;
+ 
+       // Double rotation correction: if residual baseline tilt > 1° after
+       // first rotation, apply a second micro-rotation to fully level.
+@@ -333,7 +338,7 @@
+         grayValues = List.filled(width * height, 0);
+         for (int y = 0; y < height; y++) {
+           for (int x = 0; x < width; x++) {
+-             grayValues[y * width + x] = _getRed(gray.getPixel(x, y));
++             grayValues[y * width + x] = _getRed(gray.getPixel(x, y).r);
+           }
+         }
+         if (inverted) {
+@@ -341,8 +346,8 @@
+             grayValues[i] = 255 - grayValues[i];
+           }
+         }
+-        subPixelEdges = _detectEdgesAdaptive(grayValues, width, height, sensitive: false);
+-        contour = _extractLargestContour(subPixelEdges, width, height);
++        subPixelEdges = SubPixelEdgeDetector.detectEdges(grayValues, width, height, sigma: 1.2, lowThreshold: 10, highThreshold: 30);
++        contour = _extractLargestContour(subPixelEdges, width, height); // Simplified for headless patch
+         baselineResult = _detectBaseline(contour);
+         baselineAngle = (baselineResult['angle'] as num).toDouble();
+       }
+@@ -1909,8 +1914,8 @@
+       ? (rightXGeom.isFinite
+           ? 0.65 * rightXZero + 0.35 * rightXGeom
+           : rightXZero)
+       : rightXGeom;
+-      
+-  final leftX = leftXGeom.isFinite && (inflectionLeftX - leftXRaw).abs() > 4.0 ? inflectionLeftX : leftXRaw;
+-  final rightX = rightXGeom.isFinite && (inflectionRightX - rightXRaw).abs() > 4.0 ? inflectionRightX : rightXRaw;
++      
++  final leftX = leftXGeom.isFinite && (inflectionLeftX - leftXRaw).abs() > 4.0 ? inflectionLeftX : leftXRaw;
++  final rightX = rightXGeom.isFinite && (inflectionRightX - rightXRaw).abs() > 4.0 ? inflectionRightX : rightXRaw;
+ 
+   int verticalSupportCount(double x) {

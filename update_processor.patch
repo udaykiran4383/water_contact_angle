@@ -1,0 +1,132 @@
+--- lib/image_processor.dart
++++ lib/image_processor.dart
+@@ -431,6 +431,29 @@
+       var baselineResult = _detectBaseline(contour);
+       double baselineAngle = (baselineResult['angle'] as num).toDouble();
+ 
++      // Double rotation correction: if residual baseline tilt > 1° after
++      // first rotation, apply a second micro-rotation to fully level.
++      if (isSlopedSurface && baselineAngle.abs() > 1.0) {
++        final secondRotation = -baselineAngle;
++        appliedRotationDeg += secondRotation;
++        _log('🔄 Double rotation: second micro-rotation ${secondRotation.toStringAsFixed(2)}° (total=${appliedRotationDeg.toStringAsFixed(2)}°)');
++
++        workingSrc = _rotateImage(src, appliedRotationDeg);
++        gray = imglib.grayscale(workingSrc);
++        grayValues = List.filled(width * height, 0);
++        for (int y = 0; y < height; y++) {
++          for (int x = 0; x < width; x++) {
++             grayValues[y * width + x] = _getRed(gray.getPixel(x, y));
++          }
++        }
++        if (inverted) {
++          for (int i = 0; i < grayValues.length; i++) grayValues[i] = 255 - grayValues[i];
++        }
++        subPixelEdges = _detectEdgesAdaptive(grayValues, width, height, sensitive: false);
++        contour = _extractLargestContour(subPixelEdges, width, height);
++        baselineResult = _detectBaseline(contour);
++        baselineAngle = (baselineResult['angle'] as num).toDouble();
++      }
++
+       var contourAligned =
+           contour.map((p) => _toBaselineFrame(p, baselineResult)).toList();
+ 
+@@ -632,6 +655,16 @@
+           'angle_right': thetaCircleRight,
+           'params': circle,
+         };
++        
++        // Local circle fit (bottom 40% of drop contour)
++        var bottomContour = xs.length >= 20 ? 
++          List.generate((xs.length * 0.4).round(), (i) => i).map((i) => math.Point(xs[i], ys[i])).toList() : [];
++        if (bottomContour.length >= 10) {
++            var localCircle = AngleUtils.circleFit(bottomContour.map((p) => p.x).toList(), bottomContour.map((p) => p.y).toList());
++            if (localCircle.length > 3 && localCircle[3] > 0.98) {
++                methodResults['circle_local'] = {'angle': AngleUtils.calculateCircleAngle(localCircle, baselineY), 'params': localCircle};
++            }
++        }
+         methodResults['circle'] = circleResult;
+       } catch (e) {
+         _log('⚠️ Circle fit failed: $e');
+@@ -1429,6 +1462,8 @@
+     final widthPenalty = w > width * 0.92
+         ? (w - width * 0.92) / math.max(1.0, width.toDouble())
+         : 0.0;
++        
++    final aspectPenalty = (h / math.max(1.0, w)) < 0.2 ? 500.0 * (0.2 - (h / math.max(1.0, w))) : 0.0;
+ 
+     double score = comp.length +
+         8.0 * h +
+@@ -1436,7 +1471,8 @@
+         2.2 * borderTouches -
+         40.0 * centerPenalty -
+         180.0 * widthPenalty -
++        aspectPenalty;
+ 
+     if (score > bestScore) {
+       bestScore = score;
+@@ -1838,6 +1874,33 @@
+ 
+   static Map<String, double> _detectContactPoints(
+     List<math.Point<double>> dropContourAligned, {
+@@ -1859,6 +1922,23 @@
+       fallbackContourAligned ?? dropContourAligned,
+     );
+   }
++  
++  // Find inflection point / "waist" for superhydrophobic reflection separation
++  final inflectionY = -12.0;
++  double inflectionLeftX = leftAll.first.x;
++  double inflectionRightX = rightAll.last.x;
++  for(int i=0; i<leftAll.length-1; i++) {
++      if (leftAll[i].x < leftAll[i+1].x && leftAll[i].y > -20.0) {
++          inflectionLeftX = leftAll[i].x;
++          break;
++      }
++  }
++  for(int i=rightAll.length-1; i>0; i--) {
++      if (rightAll[i].x > rightAll[i-1].x && rightAll[i].y > -20.0) {
++          inflectionRightX = rightAll[i].x;
++          break;
++      }
++  }
++
+ 
+   List<math.Point<double>> nearBaseline(List<math.Point<double>> points) {
+     var primary = points.where((p) => p.y > -8.0).toList();
+@@ -1877,12 +1957,12 @@
+       ? (leftXGeom.isFinite ? 0.65 * leftXZero + 0.35 * leftXGeom : leftXZero)
+       : leftXGeom;
+-  final rightX = rightXZero.isFinite
++  final rightXRaw = rightXZero.isFinite
+       ? (rightXGeom.isFinite
+           ? 0.65 * rightXZero + 0.35 * rightXGeom
+           : rightXZero)
+       : rightXGeom;
++      
++  final leftX = leftXGeom.isFinite && (inflectionLeftX - leftXRaw).abs() > 4.0 ? inflectionLeftX : leftXRaw;
++  final rightX = rightXGeom.isFinite && (inflectionRightX - rightXRaw).abs() > 4.0 ? inflectionRightX : rightXRaw;
+ 
+   int verticalSupportCount(double x) {
+     return dropContourAligned
+@@ -2639,15 +2719,17 @@
+         for (int i = 0; i < steps; i++) {
+           double ang = (i / steps) * 2.0 * math.pi;
+           final pAligned = math.Point(
+             cx + r * math.cos(ang),
+             cy + r * math.sin(ang),
+           );
++          if (pAligned.y > 1.5) continue;
+           final p = _fromBaselineFrame(pAligned, baseline);
+           int px = p.x.round();
+           int py = p.y.round();
+@@ -2693,8 +2775,8 @@
+     }
+ 
+     // Draw tangent lines at contact points (orange)
+-    double tanLengthLeft = 40.0;
+-    double tanLengthRight = 40.0;
++    double tanLengthLeft = 50.0 + 0.18 * (thetaFinal - 90.0).abs();
++    double tanLengthRight = 50.0 + 0.18 * (thetaFinal - 90.0).abs();
+     double angleLeftRad = thetaLeft * math.pi / 180.0;
+     double angleRightRad = thetaRight * math.pi / 180.0;

@@ -1,14 +1,12 @@
 import 'dart:io';
 import 'dart:developer' as developer;
 import 'dart:math' as math;
+import '../lib/processing/angle_utils.dart';
+import '../lib/processing/young_laplace.dart';
+import '../lib/processing/sub_pixel_edge.dart';
 import 'dart:typed_data';
 
 import 'package:image/image.dart' as imglib;
-import 'package:path_provider/path_provider.dart';
-
-import 'processing/angle_utils.dart';
-import 'processing/sub_pixel_edge.dart';
-import 'processing/young_laplace.dart';
 
 /// Pixel-to-length calibration metadata for physical-unit reporting.
 class ScaleCalibration {
@@ -26,7 +24,7 @@ class ScaleCalibration {
 
 /// Scientific-level image processor for sessile drop contact angle measurement.
 /// Implements multi-method ensemble analysis with proper uncertainty quantification.
-class ImageProcessor {
+class HeadlessImageProcessor {
   // Bootstrap iterations for uncertainty estimation
   static const int _bootstrapIterations = 100;
 
@@ -45,7 +43,7 @@ class ImageProcessor {
   // Fallback calibration used when no explicit scale is provided.
   static const double _defaultMetersPerPixelApprox = 10e-6;
 
-  static void _log(String message) {
+  static void print(String message) {
     developer.log(message, name: 'ImageProcessor');
   }
 
@@ -230,7 +228,7 @@ class ImageProcessor {
     ScaleCalibration? calibration,
   }) async {
     try {
-      _log('🔍 Starting scientific image processing: ${imageFile.path}');
+      print('🔍 Starting scientific image processing: ${imageFile.path}');
 
       final Uint8List bytes = await imageFile.readAsBytes();
       imglib.Image? src = imglib.decodeImage(bytes);
@@ -247,7 +245,7 @@ class ImageProcessor {
       final scaleSource =
           effectiveCalibration?.source ?? 'fallback_approximate';
 
-      _log('📐 Image size: ${src.width}x${src.height}');
+      print('📐 Image size: ${src.width}x${src.height}');
 
       // Convert to grayscale
       imglib.Image gray = imglib.grayscale(src);
@@ -266,7 +264,7 @@ class ImageProcessor {
         }
       }
       meanIntensity /= (width * height);
-      _log('💡 Mean intensity: ${meanIntensity.toStringAsFixed(1)}');
+      print('💡 Mean intensity: ${meanIntensity.toStringAsFixed(1)}');
 
       bool inverted = false;
       if (meanIntensity < 127) {
@@ -275,7 +273,7 @@ class ImageProcessor {
           grayValues[i] = 255 - grayValues[i];
         }
         inverted = true;
-        _log('🔄 Image inverted for darker background');
+        print('🔄 Image inverted for darker background');
       }
 
       // Sub-pixel edge detection
@@ -287,12 +285,12 @@ class ImageProcessor {
         highThreshold: 70.0,
         sigma: 1.2,
       );
-      _log('🔬 Sub-pixel edges detected: ${subPixelEdges.length} points');
+      print('🔬 Sub-pixel edges detected: ${subPixelEdges.length} points');
 
       // Fallback to integer edges if sub-pixel detection fails
       if (subPixelEdges.length < 50) {
         subPixelEdges = _detectEdgesInteger(grayValues, width, height);
-        _log(
+        print(
             '⚠️ Fallback to integer edge detection: ${subPixelEdges.length} points');
       }
 
@@ -306,7 +304,7 @@ class ImageProcessor {
                 p.y < height - 3.5,
           )
           .toList();
-      _log('🧹 Edge points after border suppression: ${subPixelEdges.length}');
+      print('🧹 Edge points after border suppression: ${subPixelEdges.length}');
 
       // Connected components to find largest droplet
       var contour = _extractLargestContour(subPixelEdges, width, height);
@@ -324,15 +322,16 @@ class ImageProcessor {
       // detected here will be near-horizontal.
       var baselineResult = _detectBaseline(contour);
       double baselineAngle = (baselineResult['angle'] as num).toDouble();
-
+      bool isSlopedSurface = false; // Simplified for headless
+      double appliedRotationDeg = 0.0;
+      
       // Double rotation correction: if residual baseline tilt > 1° after
-      // first rotation, apply a second micro-rotation to fully level.
       if (isSlopedSurface && baselineAngle.abs() > 1.0) {
         final secondRotation = -baselineAngle;
         appliedRotationDeg += secondRotation;
-        _log('🔄 Double rotation: second micro-rotation ${secondRotation.toStringAsFixed(2)}° (total=${appliedRotationDeg.toStringAsFixed(2)}°)');
+        print('🔄 Double rotation: second micro-rotation ${secondRotation.toStringAsFixed(2)}° (total=${appliedRotationDeg.toStringAsFixed(2)}°)');
 
-        workingSrc = _rotateImage(src, appliedRotationDeg);
+        imglib.Image workingSrc = imglib.copyRotate(src, angle: appliedRotationDeg);
         gray = imglib.grayscale(workingSrc);
         grayValues = List.filled(width * height, 0);
         for (int y = 0; y < height; y++) {
@@ -345,7 +344,7 @@ class ImageProcessor {
             grayValues[i] = 255 - grayValues[i];
           }
         }
-        subPixelEdges = _detectEdgesAdaptive(grayValues, width, height, sensitive: false);
+        subPixelEdges = SubPixelEdgeDetector.detectEdges(grayValues, width, height, sigma: 1.2, lowThreshold: 10, highThreshold: 30);
         contour = _extractLargestContour(subPixelEdges, width, height);
         baselineResult = _detectBaseline(contour);
         baselineAngle = (baselineResult['angle'] as num).toDouble();
@@ -384,9 +383,9 @@ class ImageProcessor {
       final rightContactOriginal =
           _fromBaselineFrame(math.Point(rightXAligned, 0.0), baselineResult);
 
-      _log(
+      print(
           '📍 Baseline tilt=${baselineAngle.toStringAsFixed(2)}°, RMS=${(baselineResult['rms'] as num).toDouble().toStringAsFixed(2)} px');
-      _log(
+      print(
           '📍 Contacts (aligned): left=${leftXAligned.toStringAsFixed(2)}, right=${rightXAligned.toStringAsFixed(2)}');
 
       final double contactSpan = (rightXAligned - leftXAligned).abs();
@@ -405,7 +404,7 @@ class ImageProcessor {
       final analysisContour = analysisContourAligned
           .map((p) => _fromBaselineFrame(p, baselineResult))
           .toList();
-      _log(
+      print(
           '🔎 Analysis contour: ${analysisContourAligned.length} points (isolated=${dropContourAligned.length}, raw=${contourAligned.length})');
 
       // Prepare points for fitting (drop points are above baseline => y < 0 in aligned frame)
@@ -479,10 +478,10 @@ class ImageProcessor {
           'baseline_y': baselineY,
         };
         methodResults['circle'] = _validateMethodResult('circle', circleResult);
-        _log(
+        print(
             '⭕ Circle: ${thetaCircle.toStringAsFixed(2)}° (R²=${rSqCircle.toStringAsFixed(3)})${_methodStatusSuffix(methodResults['circle']!)}');
       } catch (e) {
-        _log('⚠️ Circle fit failed: $e');
+        print('⚠️ Circle fit failed: $e');
         methodResults['circle'] = _invalidMethodResult('fit_failed');
       }
 
@@ -523,10 +522,10 @@ class ImageProcessor {
 
         methodResults['ellipse'] =
             _validateMethodResult('ellipse', ellipseResult);
-        _log(
+        print(
             '⬭ Ellipse: ${thetaEllipse.toStringAsFixed(2)}° (R²=${rSqEllipse.toStringAsFixed(3)})${_methodStatusSuffix(methodResults['ellipse']!)}');
       } catch (e) {
-        _log('⚠️ Ellipse fit failed: $e');
+        print('⚠️ Ellipse fit failed: $e');
         methodResults['ellipse'] = _invalidMethodResult('fit_failed');
       }
 
@@ -563,10 +562,10 @@ class ImageProcessor {
         };
         methodResults['polynomial'] =
             _validateMethodResult('polynomial', polyResult);
-        _log(
+        print(
             '📈 Polynomial: ${thetaPoly.toStringAsFixed(2)}° (R²=${polyRSq.toStringAsFixed(3)})${_methodStatusSuffix(methodResults['polynomial']!)}');
       } catch (e) {
-        _log('⚠️ Polynomial fit failed: $e');
+        print('⚠️ Polynomial fit failed: $e');
         methodResults['polynomial'] = _invalidMethodResult('fit_failed');
       }
 
@@ -585,10 +584,10 @@ class ImageProcessor {
         };
         methodResults['young_laplace'] =
             _validateMethodResult('young_laplace', ylMethodResult);
-        _log(
+        print(
             '🔬 Young-Laplace: ${ylResult['contact_angle']!.toStringAsFixed(2)}° (Bo=${ylResult['bond_number']!.toStringAsFixed(3)})${_methodStatusSuffix(methodResults['young_laplace']!)}');
       } catch (e) {
-        _log('⚠️ Young-Laplace fit failed: $e');
+        print('⚠️ Young-Laplace fit failed: $e');
         methodResults['young_laplace'] = _invalidMethodResult('fit_failed');
       }
 
@@ -596,6 +595,9 @@ class ImageProcessor {
 
       var ensembleResult = _calculateEnsembleAngle(methodResults);
       double thetaFinal = ensembleResult['angle'];
+      if (!thetaFinal.isFinite) {
+          print('ERROR: Ensemble returned NaN. valid methods: ${methodResults.entries.where((e) => _isMethodValid(e.value)).map((e) => e.key).join(', ')}');
+      }
       double thetaLeft = ensembleResult['angle_left'];
       double thetaRight = ensembleResult['angle_right'];
       Map<String, double> weights = ensembleResult['weights'];
@@ -656,14 +658,16 @@ class ImageProcessor {
         rightXAligned,
         methodResults,
         thetaFinal,
-        thetaLeft,
+      thetaLeft,
         thetaRight,
       );
 
       // Save annotated image
-      Directory tmp = await getTemporaryDirectory();
-      String outPath =
-          '${tmp.path}/contact_angle_${DateTime.now().millisecondsSinceEpoch}.png';
+        // (Skip saving debug images in headless mode if preferred, or save locally)
+        final tempDirStr = './debug_output';
+        await Directory(tempDirStr).create(recursive: true);
+        String outPath =
+          '$tempDirStr/contact_angle_${DateTime.now().millisecondsSinceEpoch}.png';
       File outFile = File(outPath);
       await outFile.writeAsBytes(imglib.encodePng(annotated));
 
@@ -723,7 +727,7 @@ ${inverted ? 'Background: Dark (auto-corrected)' : 'Background: Light'}
 $scaleCaution
 ''';
 
-      _log(
+      print(
           '✅ Done. Final angle: ${thetaFinal.toStringAsFixed(2)}° ± ${uncertainty.toStringAsFixed(2)}°');
 
       return {
@@ -771,13 +775,10 @@ $scaleCaution
         'filename': imageFile.path.split(Platform.pathSeparator).last,
         'surface_type': surfaceType,
       };
-    } catch (e, st) {
-      _log('❌ Processing failed: $e\n$st');
-      return {
-        'text':
-            '❌ Processing failed: ${e.toString()}\n\nTry: better contrast, cropped droplet, or attach sample image.',
-        'annotated': null
-      };
+    } catch (e, stacktrace) {
+      print('CRITICAL ERROR in processImage: $e');
+      print(stacktrace.toString());
+      return {'angle': double.nan};
     }
   }
 
@@ -1501,6 +1502,10 @@ $scaleCaution
   for(int i=0; i<leftAll.length-1; i++) {
       if (leftAll[i].x < leftAll[i+1].x && leftAll[i].y > -20.0) {
           inflectionLeftX = leftAll[i].x;
+          break;
+      }
+  }
+  for(int i=rightAll.length-1; i>0; i--) {
       if (rightAll[i].x > rightAll[i-1].x && rightAll[i].y > -20.0) {
           inflectionRightX = rightAll[i].x;
           break;
@@ -1520,6 +1525,7 @@ $scaleCaution
     final leftXGeom = _estimateContactX(leftCandidates, isLeft: true);
     final rightXGeom = _estimateContactX(rightCandidates, isLeft: false);
     
+    // Add logic matching main imageProcessor for zero crossing
     final leftXZero = _estimateContactXByZeroCrossing(leftCandidates, isLeft: true);
     final rightXZero = _estimateContactXByZeroCrossing(rightCandidates, isLeft: false);
 
@@ -1550,11 +1556,16 @@ $scaleCaution
         ((leftSupport >= 2 && rightSupport >= 2) ||
             (leftCandidates.length >= 6 && rightCandidates.length >= 6))) {
       return {'leftX': leftX, 'rightX': rightX};
+    } else {
+      print("WARNING: Failed vertical support check or geometric check. Falling back to simple contact points... leftX=$leftX rightX=$rightX leftSupport=$leftSupport rightSupport=$rightSupport. Candidates: left=${leftCandidates.length} right=${rightCandidates.length}");
     }
 
-    return _fallbackContactPoints(
+    final fallbackCps = _fallbackContactPoints(
       fallbackContourAligned ?? dropContourAligned,
     );
+    
+    print("Fallback points: ${fallbackCps}");
+    return fallbackCps;
   }
 
   static double _estimateContactX(
@@ -1587,6 +1598,31 @@ $scaleCaution
     }
     return sumWX / sumW;
   }
+
+  static Map<String, double> _fallbackContactPoints(
+    List<math.Point<double>> contourAligned,
+  ) {
+    final nearBaseline = contourAligned.where((p) => p.y.abs() <= 5.0).toList();
+    if (nearBaseline.length < 4) {
+      return {'leftX': double.nan, 'rightX': double.nan};
+    }
+
+    final minX = nearBaseline.map((p) => p.x).reduce(math.min);
+    final maxX = nearBaseline.map((p) => p.x).reduce(math.max);
+    final centerX = (minX + maxX) * 0.5;
+    final left = nearBaseline.where((p) => p.x < centerX).toList();
+    final right = nearBaseline.where((p) => p.x > centerX).toList();
+    if (left.isEmpty || right.isEmpty) {
+      print("Fallback failed: left isEmpty=${left.isEmpty} right isEmpty=${right.isEmpty}");
+      return {'leftX': double.nan, 'rightX': double.nan};
+    }
+
+    final leftX = left.map((p) => p.x).reduce(math.max);
+    final rightX = right.map((p) => p.x).reduce(math.min);
+    if (!(leftX.isFinite && rightX.isFinite && rightX > leftX + 4.0)) {
+      print("Fallback failed: leftX.isFinite=${leftX.isFinite} rightX.isFinite=${rightX.isFinite} diff=${rightX - leftX}");
+      return {'leftX': double.nan, 'rightX': double.nan};
+    }
 
     return {'leftX': leftX, 'rightX': rightX};
   }
@@ -1652,9 +1688,10 @@ $scaleCaution
 
       rSq = rSq.clamp(0.0, 1.0);
       // Start from quality, then suppress strong outliers in method disagreement.
-      double weight = rSq >= _minRSquared ? (rSq * rSq + 0.05) : rSq * 0.35;
-      final disagreement = (angle - medianAngle).abs();
-      weight *= math.exp(-disagreement / 18.0);
+    double weight = rSq >= _minRSquared ? (rSq * rSq + 0.05) : rSq * 0.35;
+    final disagreement = (angle - medianAngle).abs();
+    if (!disagreement.isFinite) continue;
+    weight *= math.exp(-disagreement / 18.0);
 
       // Additional weight for Young-Laplace (physics-based)
       if (entry.key == 'young_laplace' && rSq > 0.7) weight *= 1.1;
@@ -1679,27 +1716,29 @@ $scaleCaution
       }
     }
 
-    if (sumWeight < 0.01) {
-      final poly = methodResults['polynomial'];
-      if (_isMethodValid(poly)) {
-        final polyAngle = (poly!['angle'] as num?)?.toDouble() ?? 90.0;
-        final polyLeft = (poly['angle_left'] as num?)?.toDouble() ?? polyAngle;
-        final polyRight =
-            (poly['angle_right'] as num?)?.toDouble() ?? polyAngle;
-        return {
-          'angle': polyAngle,
-          'angle_left': polyLeft,
-          'angle_right': polyRight,
-          'weights': {'polynomial': 1.0},
-        };
+    if (sumWeight < 0.01 || !sumAngle.isFinite) {
+    final poly = methodResults['polynomial'];
+    if (_isMethodValid(poly)) {
+      final polyAngle = (poly!['angle'] as num?)?.toDouble() ?? 90.0;
+      if (polyAngle.isFinite) {
+          final polyLeft = (poly['angle_left'] as num?)?.toDouble() ?? polyAngle;
+          final polyRight =
+              (poly['angle_right'] as num?)?.toDouble() ?? polyAngle;
+          return {
+            'angle': polyAngle,
+            'angle_left': polyLeft,
+            'angle_right': polyRight,
+            'weights': {'polynomial': 1.0},
+          };
       }
-      final fallback = validAngles.isNotEmpty ? _median(validAngles) : 90.0;
-      return {
-        'angle': fallback,
-        'angle_left': fallback,
-        'angle_right': fallback,
-        'weights': weights,
-      };
+    }
+    final fallback = validAngles.isNotEmpty && medianAngle.isFinite ? medianAngle : 90.0;
+    return {
+      'angle': fallback,
+      'angle_left': fallback,
+      'angle_right': fallback,
+      'weights': weights,
+    };
     }
 
     double ensembleAngle = sumAngle / sumWeight;
