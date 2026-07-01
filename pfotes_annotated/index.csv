@@ -1,0 +1,13 @@
+filename,angle_deg,left_deg,right_deg,uncertainty_deg,annotated
+C_1.5%_1 coat_5a,111.97,111.78,112.81,-,pfotes_annotated/C_1.5%_1 coat_5a.png
+C_1.5%_1 coat_5b,117.48,117.80,117.15,-,pfotes_annotated/C_1.5%_1 coat_5b.png
+C_1.5%_1 coat_6,118.92,119.11,119.26,-,pfotes_annotated/C_1.5%_1 coat_6.png
+C_1.5%_2 coat_5,133.49,133.55,133.78,-,pfotes_annotated/C_1.5%_2 coat_5.png
+C_1.5%_2 coat_6,130.37,130.71,130.11,-,pfotes_annotated/C_1.5%_2 coat_6.png
+C_3%_1 coat_5,122.37,122.76,121.84,-,pfotes_annotated/C_3%_1 coat_5.png
+C_3%_1 coat_6a,129.77,130.11,129.31,-,pfotes_annotated/C_3%_1 coat_6a.png
+C_3%_1 coat_6b,130.76,131.37,130.98,-,pfotes_annotated/C_3%_1 coat_6b.png
+C_3%_2 coat_5a,115.54,115.60,116.27,-,pfotes_annotated/C_3%_2 coat_5a.png
+C_3%_2 coat_5b,123.41,123.65,122.99,-,pfotes_annotated/C_3%_2 coat_5b.png
+C_3%_2 coat_6a,134.31,134.14,133.95,-,pfotes_annotated/C_3%_2 coat_6a.png
+C_3%_2 coat_6b,129.05,128.51,129.24,-,pfotes_annotated/C_3%_2 coat_6b.png

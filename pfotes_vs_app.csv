@@ -1,0 +1,16 @@
+filename,reference_LBADSA_deg,app_measured_deg,abs_error_deg,percent_error
+C_1.5%_1 coat_5a,112.07,111.97,0.10,0.09%
+C_1.5%_1 coat_5b,116.79,117.48,0.69,0.59%
+C_1.5%_1 coat_6,119.60,118.92,0.69,0.58%
+C_1.5%_2 coat_5,132.44,133.49,1.05,0.79%
+C_1.5%_2 coat_6,131.29,130.37,0.92,0.70%
+C_3%_1 coat_5,124.53,122.37,2.17,1.74%
+C_3%_1 coat_6a,131.62,129.77,1.85,1.41%
+C_3%_1 coat_6b,129.06,130.76,1.70,1.32%
+C_3%_2 coat_5a,114.54,115.54,1.01,0.88%
+C_3%_2 coat_5b,126.34,123.41,2.93,2.32%
+C_3%_2 coat_6a,133.68,134.31,0.63,0.47%
+C_3%_2 coat_6b,132.71,129.05,3.66,2.76%
+# Summary: N=12, MAE=1.45 deg, median=0.99 deg, max=3.66 deg, mean %error=1.14%
+# Reference tool: LB-ADSA (ImageJ). App: Automated Sessile-Drop Contact Angle Analyzer (this repo).
+# All 12 drops measured; ADSA fits 12/12. Annotated overlays in pfotes_annotated/.
