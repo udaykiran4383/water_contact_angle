@@ -1,451 +1,453 @@
 // lib/processing/young_laplace.dart
 import 'dart:math' as math;
 
-/// Young-Laplace equation solver for precise contact angle measurement.
-/// Implements numerical integration of the Laplace pressure equation:
-///   ΔP = γ(1/R₁ + 1/R₂)
-/// For axisymmetric sessile drops, this becomes the classical ODE system.
+/// Axisymmetric Drop Shape Analysis (ADSA) based on the Young–Laplace equation.
+///
+/// This is the reference method for sessile-drop contact-angle metrology. The
+/// drop meridian profile is the solution of the Bashforth–Adams form of the
+/// Young–Laplace equation, written in dimensionless arc length s (scaled by the
+/// apex radius of curvature b):
+///
+///   dx/ds   = cos(phi)
+///   dz/ds   = sin(phi)
+///   dphi/ds = 2 - beta*z - sin(phi)/x
+///
+/// where:
+///   x, z   : dimensionless coordinates (x outward, z downward from the apex),
+///   phi    : tangent angle measured from the horizontal (0 at the apex),
+///   beta   : Bond number = Δρ·g·b² / γ  (the only shape parameter),
+///   b      : apex radius of curvature (pixels) — the physical length scale.
+///
+/// The fit minimises the true geometric (orthogonal) distance from every
+/// detected contour point to the theoretical meridian, over the parameter
+/// vector p = [beta, b, x0, z0] (apex position x0,z0 in pixels). Optimisation
+/// uses a multi-start Nelder–Mead simplex with robust (trimmed) residuals. The
+/// contact angle is read directly as phi at the baseline crossing of the
+/// best-fit profile — no linear interpolation of the raw data.
 class YoungLaplaceSolver {
-  // Physical constants (SI units by default, but normalized internally)
-  static const double _defaultSurfaceTension = 0.0728; // N/m for water at 20°C
+  // Physical constants (SI) used only for the *absolute* Bond number helper.
+  static const double _defaultSurfaceTension = 0.0728; // N/m, water @20°C
   static const double _defaultDensityDiff = 998.0; // kg/m³ (water-air)
   static const double _gravity = 9.81; // m/s²
 
-  /// Calculate Bond number: Bo = ρgR²/γ
-  /// Indicates importance of gravity vs surface tension
-  /// Bo << 1: surface tension dominates (spherical drop)
-  /// Bo >> 1: gravity dominates (flattened drop)
+  /// Absolute physical Bond number Bo = Δρ·g·R² / γ (R in metres).
   static double bondNumber(double radiusM, {double? gamma, double? deltaRho}) {
     gamma ??= _defaultSurfaceTension;
     deltaRho ??= _defaultDensityDiff;
     return (deltaRho * _gravity * radiusM * radiusM) / gamma;
   }
 
-  /// Integrate Young-Laplace equation using RK4 to generate theoretical profile.
+  // --- ODE integration ----------------------------------------------------
+
+  /// Integrate the dimensionless Young–Laplace profile from the apex with a
+  /// fixed-step RK4 integrator. The step is small relative to the unit apex
+  /// curvature, giving local error ~O(ds⁵) ≈ 1e-9 — well below pixel noise.
   ///
-  /// The system of ODEs (in normalized coordinates):
-  ///   dx/ds = cos(φ)
-  ///   dz/ds = sin(φ)
-  ///   dφ/ds = 2/b - Bo·z - sin(φ)/x
-  ///
-  /// Where s = arc length, b = apex curvature radius, Bo = Bond number.
-  ///
-  /// Returns list of (x, z) points describing the drop profile.
-  static List<List<double>> integrateProfile({
-    required double apexCurvature, // b = R₀ (radius at apex)
-    required double bondNumber, // Bo = ρgR₀²/γ
-    int numSteps = 500,
-    double maxArcLength = 3.0, // in units of apex radius
-  }) {
-    List<List<double>> profile = [];
+  /// Integration proceeds until z reaches [zStop] (plus a margin), the tangent
+  /// turns past π, or the step budget is exhausted. Returns parallel lists of
+  /// the right-flank profile (xs ≥ 0), heights zs and tangent angles phis.
+  static _Profile _integrate(double beta, double zStop) {
+    const double ds = 0.02;
+    const int maxSteps = 1200;
 
-    // Initial conditions at apex (s = 0)
-    double x = 1e-8; // avoid singularity at x=0
-    double z = 0.0;
-    double phi = 0.0; // horizontal tangent at apex
+    final xs = <double>[0.0];
+    final zs = <double>[0.0];
+    final phis = <double>[0.0];
 
-    double ds = maxArcLength / numSteps;
-    double b = apexCurvature;
-    double bo = bondNumber;
+    // Apex series start to step off the x→0 singularity cleanly.
+    double x = ds;
+    double z = 0.5 * ds * ds; // z ≈ s²/2 near the apex (dphi/ds ≈ 1)
+    double phi = ds; // phi ≈ s near the apex
+    xs.add(x);
+    zs.add(z);
+    phis.add(phi);
 
-    profile.add([0.0, 0.0]); // apex point
-
-    for (int step = 0; step < numSteps; step++) {
-      // RK4 integration
-      var k1 = _derivatives(x, z, phi, b, bo);
-      var k2 = _derivatives(x + 0.5 * ds * k1[0], z + 0.5 * ds * k1[1],
-          phi + 0.5 * ds * k1[2], b, bo);
-      var k3 = _derivatives(x + 0.5 * ds * k2[0], z + 0.5 * ds * k2[1],
-          phi + 0.5 * ds * k2[2], b, bo);
-      var k4 =
-          _derivatives(x + ds * k3[0], z + ds * k3[1], phi + ds * k3[2], b, bo);
+    final zTarget = zStop + 0.15;
+    for (int i = 0; i < maxSteps; i++) {
+      final k1 = _deriv(x, z, phi, beta);
+      final k2 = _deriv(x + 0.5 * ds * k1[0], z + 0.5 * ds * k1[1],
+          phi + 0.5 * ds * k1[2], beta);
+      final k3 = _deriv(x + 0.5 * ds * k2[0], z + 0.5 * ds * k2[1],
+          phi + 0.5 * ds * k2[2], beta);
+      final k4 = _deriv(
+          x + ds * k3[0], z + ds * k3[1], phi + ds * k3[2], beta);
 
       x += (ds / 6.0) * (k1[0] + 2 * k2[0] + 2 * k3[0] + k4[0]);
       z += (ds / 6.0) * (k1[1] + 2 * k2[1] + 2 * k3[1] + k4[1]);
       phi += (ds / 6.0) * (k1[2] + 2 * k2[2] + 2 * k3[2] + k4[2]);
 
-      // Stop if profile becomes unphysical
-      if (x <= 0 || !x.isFinite || !z.isFinite) break;
+      if (!x.isFinite || !z.isFinite || !phi.isFinite || x <= 0) break;
+      xs.add(x);
+      zs.add(z);
+      phis.add(phi);
 
-      profile.add([x, z]);
-
-      // Stop if we've reached past π/2 contact angle region
-      if (phi > math.pi) break;
+      if (z >= zTarget || phi >= math.pi) break;
     }
 
-    return profile;
+    return _Profile(xs, zs, phis);
   }
 
-  /// Compute derivatives for RK4 integration
-  static List<double> _derivatives(
-      double x, double z, double phi, double b, double bo) {
-    double dxds = math.cos(phi);
-    double dzds = math.sin(phi);
-
-    // Handle singularity at x→0 using L'Hôpital's rule
-    double sinPhiOverX = x.abs() < 1e-10 ? math.cos(phi) : math.sin(phi) / x;
-    double dphids = (2.0 / b) - bo * z - sinPhiOverX;
-
+  static List<double> _deriv(double x, double z, double phi, double beta) {
+    final dxds = math.cos(phi);
+    final dzds = math.sin(phi);
+    // Near the apex sin(phi)/x → dphi/ds, giving dphi/ds = (2 - beta·z)/2.
+    final double dphids;
+    if (x < 1e-6) {
+      dphids = (2.0 - beta * z) / 2.0;
+    } else {
+      dphids = 2.0 - beta * z - math.sin(phi) / x;
+    }
     return [dxds, dzds, dphids];
   }
 
-  /// Fit experimental contour to Young-Laplace solution.
-  /// Uses optimization to find best-fit parameters.
+  // --- Public fit ---------------------------------------------------------
+
+  /// Fit the Young–Laplace profile to [contour] (points above [baselineY],
+  /// in a baseline-aligned frame where the baseline is horizontal).
   ///
-  /// Returns map with:
-  /// - 'contact_angle': fitted contact angle in degrees
-  /// - 'apex_curvature': apex radius of curvature
-  /// - 'bond_number': effective Bond number
-  /// - 'residual': RMS fitting residual
-  /// - 'r_squared': coefficient of determination
+  /// Returns:
+  ///   contact_angle  : fitted contact angle (deg), read at the baseline,
+  ///   angle_left/right: same value (the model is axisymmetric),
+  ///   apex_curvature : dimensionless apex radius (=1 by construction kept for
+  ///                    API compatibility) — the physical scale is bond-coupled,
+  ///   bond_number    : fitted shape Bond number beta,
+  ///   residual       : normalised RMS orthogonal residual (fraction of b),
+  ///   r_squared      : geometric coefficient of determination.
   static Map<String, double> fitContour(
       List<math.Point<double>> contour, double baselineY,
       {double? dropRadiusPixels}) {
-    if (contour.length < 10) {
-      return {
-        'contact_angle': double.nan,
-        'apex_curvature': double.nan,
-        'bond_number': double.nan,
-        'residual': double.infinity,
-        'r_squared': 0.0,
-      };
-    }
+    final fail = {
+      'contact_angle': double.nan,
+      'angle_left': double.nan,
+      'angle_right': double.nan,
+      'apex_curvature': double.nan,
+      'bond_number': double.nan,
+      'residual': double.infinity,
+      'r_squared': 0.0,
+    };
+    if (contour.length < 10) return fail;
 
-    // Extract points above baseline
-    List<math.Point<double>> dropPoints =
-        contour.where((p) => p.y < baselineY - 2).toList();
+    // Drop points strictly above the baseline.
+    var pts = contour.where((p) => p.y < baselineY - 1.0).toList();
+    if (pts.length < 8) return fail;
 
-    if (dropPoints.length < 8) {
-      return {
-        'contact_angle': double.nan,
-        'apex_curvature': double.nan,
-        'bond_number': double.nan,
-        'residual': double.infinity,
-        'r_squared': 0.0,
-      };
-    }
+    // Subsample to bound the optimisation cost while preserving both flanks.
+    pts = _subsample(pts, 180);
 
-    // Find drop center x and apex
-    double minY = dropPoints.map((p) => p.y).reduce(math.min);
-    double leftX = dropPoints.map((p) => p.x).reduce(math.min);
-    double rightX = dropPoints.map((p) => p.x).reduce(math.max);
+    final minY = pts.map((p) => p.y).reduce(math.min);
+    final leftX = pts.map((p) => p.x).reduce(math.min);
+    final rightX = pts.map((p) => p.x).reduce(math.max);
+    final dropHeight = baselineY - minY;
+    final dropWidth = rightX - leftX;
+    if (dropWidth <= 1e-6 || dropHeight <= 1e-6) return fail;
 
-    // Estimate apex center from upper cap (less affected by contact-line noise).
-    final apexBand = dropPoints
-        .where((p) => p.y <= minY + (baselineY - minY) * 0.18)
-        .toList();
-    double centerX = apexBand.isNotEmpty
+    // Apex x from the upper cap (least contaminated by the contact line).
+    final apexBand =
+        pts.where((p) => p.y <= minY + 0.18 * dropHeight).toList();
+    final x0Init = apexBand.isNotEmpty
         ? apexBand.map((p) => p.x).reduce((a, b) => a + b) / apexBand.length
-        : (leftX + rightX) / 2.0;
-    double dropHeight = baselineY - minY;
-    double dropWidth = rightX - leftX;
+        : 0.5 * (leftX + rightX);
+    final z0Init = minY;
+    final bInit = (dropRadiusPixels ?? dropWidth / 2.0).clamp(5.0, 1e6);
 
-    if (dropWidth <= 1e-6 || dropHeight <= 1e-6) {
-      return {
-        'contact_angle': double.nan,
-        'apex_curvature': double.nan,
-        'bond_number': double.nan,
-        'residual': double.infinity,
-        'r_squared': 0.0,
-      };
-    }
+    final ex = pts.map((p) => p.x).toList(growable: false);
+    final ey = pts.map((p) => p.y).toList(growable: false);
 
-    // Estimate apex curvature from geometry
-    double apexRadius = dropRadiusPixels ?? (dropWidth / 2.0);
-    if (apexRadius < 5) apexRadius = 5.0;
-
-    // Estimate Bond number based on aspect ratio
-    // For small Bond numbers, drop is nearly spherical
-    double aspectRatio = dropHeight / (dropWidth / 2.0);
-    double estimatedBo = _estimateBondNumber(aspectRatio);
-
-    // Height ratio of baseline in normalized coordinates.
-    final targetHeightRatio = (dropHeight / apexRadius).clamp(0.05, 4.0);
-    final maxArcLength = (targetHeightRatio * 2.4 + 0.8).clamp(2.6, 8.0);
-
-    // Coarse-to-fine search for better parameter precision.
-    double bestResidual = double.infinity;
-    double bestAngle = 90.0;
-    double bestBo = estimatedBo;
-    double bestApex = 1.0;
-
-    final boMin = math.max(0.01, estimatedBo * 0.25);
-    final boMax = math.max(boMin + 0.05, estimatedBo * 3.0);
-    final coarse = _searchBestParameters(
-      dropPoints: dropPoints,
-      centerX: centerX,
-      baselineY: baselineY,
-      scale: apexRadius,
-      targetHeightRatio: targetHeightRatio,
-      maxArcLength: maxArcLength,
-      boMin: boMin,
-      boMax: boMax,
-      boSteps: 12,
-      apexMin: 0.65,
-      apexMax: 1.75,
-      apexSteps: 12,
-    );
-
-    bestResidual = coarse['residual']!;
-    bestAngle = coarse['angle']!;
-    bestBo = coarse['bo']!;
-    bestApex = coarse['apex']!;
-
-    for (int pass = 0; pass < 2; pass++) {
-      final boHalfRange = (pass == 0 ? 0.45 : 0.20) * math.max(0.05, bestBo);
-      final refine = _searchBestParameters(
-        dropPoints: dropPoints,
-        centerX: centerX,
-        baselineY: baselineY,
-        scale: apexRadius,
-        targetHeightRatio: targetHeightRatio,
-        maxArcLength: maxArcLength,
-        boMin: math.max(0.005, bestBo - boHalfRange),
-        boMax: bestBo + boHalfRange,
-        boSteps: 8,
-        apexMin: math.max(0.45, bestApex - (pass == 0 ? 0.20 : 0.08)),
-        apexMax: bestApex + (pass == 0 ? 0.20 : 0.08),
-        apexSteps: 8,
+    // Multi-start over physically-spaced Bond seeds to avoid local minima.
+    const betaSeeds = [0.03, 0.15, 0.5, 1.2, 3.0];
+    List<double>? best;
+    double bestCost = double.infinity;
+    for (final beta0 in betaSeeds) {
+      final start = [math.log(beta0), bInit, x0Init, z0Init];
+      final step = [0.5, 0.08 * bInit, 0.04 * bInit, 0.04 * bInit];
+      final res = _nelderMead(
+        start,
+        step,
+        (p) => _cost(p, ex, ey, baselineY),
+        maxIter: 160,
       );
-
-      if (refine['residual']! < bestResidual) {
-        bestResidual = refine['residual']!;
-        bestAngle = refine['angle']!;
-        bestBo = refine['bo']!;
-        bestApex = refine['apex']!;
+      if (res.cost < bestCost) {
+        bestCost = res.cost;
+        best = res.params;
       }
     }
+    if (best == null || !bestCost.isFinite) return fail;
 
-    final bestProfile = integrateProfile(
-      apexCurvature: bestApex,
-      bondNumber: bestBo,
-      numSteps: 550,
-      maxArcLength: maxArcLength,
-    );
-    final stats = _calculateProfileResidualStats(
-      bestProfile,
-      dropPoints,
-      centerX,
-      baselineY,
-      apexRadius,
-    );
+    final beta = math.exp(best[0]).clamp(1e-4, 50.0);
+    final b = best[1];
+    final x0 = best[2];
+    final z0 = best[3];
+    if (!(b.isFinite && b > 0)) return fail;
 
-    final expXs =
-        dropPoints.map((p) => (p.x - centerX).abs() / apexRadius).toList();
-    final meanExpX = expXs.reduce((a, b) => a + b) / expXs.length;
+    final zContact = (baselineY - z0) / b;
+    final profile = _integrate(beta, math.max(zContact, 0.05));
+    final theta = _angleAtHeight(profile, zContact);
+    if (!theta.isFinite) return fail;
+
+    // Goodness of fit: geometric R² from orthogonal residuals.
+    final stats = _residualStats(profile, ex, ey, b, x0, z0);
+    final rmsPx = stats.rms;
+    final residualNorm = (rmsPx / b);
+
     double ssTot = 0.0;
-    for (final x in expXs) {
-      final d = x - meanExpX;
-      ssTot += d * d;
+    final cxData = ex.reduce((a, c) => a + c) / ex.length;
+    final cyData = ey.reduce((a, c) => a + c) / ey.length;
+    for (int i = 0; i < ex.length; i++) {
+      final dx = ex[i] - cxData;
+      final dy = ey[i] - cyData;
+      ssTot += dx * dx + dy * dy;
     }
-
-    double rSquared = ssTot > 1e-12 ? 1.0 - (stats['ss_res']! / ssTot) : 0.0;
-    rSquared = math.max(0.0, math.min(1.0, rSquared));
+    double rSquared =
+        ssTot > 1e-9 ? 1.0 - (stats.ssRes / ssTot) : 0.0;
+    rSquared = rSquared.clamp(0.0, 1.0);
 
     return {
-      'contact_angle': bestAngle,
-      'apex_curvature': bestApex,
-      'bond_number': bestBo,
-      'residual': stats['rms'] ?? bestResidual,
+      'contact_angle': theta,
+      'angle_left': theta,
+      'angle_right': theta,
+      'apex_curvature': 1.0,
+      'bond_number': beta,
+      'residual': residualNorm.isFinite ? residualNorm : double.infinity,
       'r_squared': rSquared,
     };
   }
 
-  static Map<String, double> _searchBestParameters({
-    required List<math.Point<double>> dropPoints,
-    required double centerX,
-    required double baselineY,
-    required double scale,
-    required double targetHeightRatio,
-    required double maxArcLength,
-    required double boMin,
-    required double boMax,
-    required int boSteps,
-    required double apexMin,
-    required double apexMax,
-    required int apexSteps,
-  }) {
-    double bestResidual = double.infinity;
-    double bestAngle = 90.0;
-    double bestBo = (boMin + boMax) / 2.0;
-    double bestApex = (apexMin + apexMax) / 2.0;
+  // --- Objective ----------------------------------------------------------
 
-    final boStep = boSteps <= 1 ? 0.0 : (boMax - boMin) / (boSteps - 1);
-    final apexStep =
-        apexSteps <= 1 ? 0.0 : (apexMax - apexMin) / (apexSteps - 1);
+  /// Robust (trimmed) sum of squared orthogonal residuals in pixel² units,
+  /// normalised so the optimiser sees a well-scaled cost.
+  static double _cost(
+      List<double> p, List<double> ex, List<double> ey, double baselineY) {
+    final beta = math.exp(p[0]);
+    final b = p[1];
+    final x0 = p[2];
+    final z0 = p[3];
+    if (!beta.isFinite || beta <= 0 || beta > 60.0) return 1e18;
+    if (!b.isFinite || b < 3.0 || b > 5e5) return 1e18;
 
-    for (int i = 0; i < boSteps; i++) {
-      final bo = boMin + i * boStep;
-      for (int j = 0; j < apexSteps; j++) {
-        final apex = apexMin + j * apexStep;
-
-        final profile = integrateProfile(
-          apexCurvature: apex,
-          bondNumber: bo,
-          numSteps: 420,
-          maxArcLength: maxArcLength,
-        );
-        if (profile.length < 10) continue;
-
-        final maxZ = profile.map((p) => p[1]).reduce(math.max);
-        if (maxZ < targetHeightRatio * 0.75) {
-          continue;
-        }
-
-        final residual = _calculateProfileResidual(
-          profile,
-          dropPoints,
-          centerX,
-          baselineY,
-          scale,
-        );
-        if (!residual.isFinite) continue;
-
-        final angle =
-            _extractContactAngleFromProfile(profile, targetHeightRatio);
-        if (!angle.isFinite) continue;
-
-        if (residual < bestResidual) {
-          bestResidual = residual;
-          bestAngle = angle;
-          bestBo = bo;
-          bestApex = apex;
-        }
-      }
+    // Required dimensionless height to cover the lowest data point.
+    double maxZneed = 0.0;
+    for (int i = 0; i < ey.length; i++) {
+      final zz = (ey[i] - z0) / b;
+      if (zz > maxZneed) maxZneed = zz;
     }
+    if (maxZneed <= 0) return 1e18;
 
-    return {
-      'residual': bestResidual,
-      'angle': bestAngle,
-      'bo': bestBo,
-      'apex': bestApex,
-    };
+    final profile = _integrate(beta, maxZneed);
+    if (profile.xs.length < 8) return 1e18;
+    // Reject profiles that cannot reach the data extent (under-curved).
+    if (profile.zs.last < maxZneed * 0.85) return 1e17;
+
+    final stats = _residualStats(profile, ex, ey, b, x0, z0);
+    return stats.cost;
   }
 
-  /// Estimate Bond number from aspect ratio
-  static double _estimateBondNumber(double aspectRatio) {
-    // Empirical relationship: higher aspect ratio → lower Bond number
-    if (aspectRatio > 1.5) return 0.1; // near spherical
-    if (aspectRatio > 1.0) return 0.5;
-    if (aspectRatio > 0.5) return 1.0;
-    return 2.0; // very flat
+  // --- Residual / nearest-distance machinery ------------------------------
+
+  static _ResStats _residualStats(_Profile prof, List<double> ex,
+      List<double> ey, double b, double x0, double z0) {
+    final n = ex.length;
+    if (n == 0 || b <= 0) {
+      return _ResStats(double.infinity, double.infinity, double.infinity);
+    }
+    // Trim distance cap (dimensionless): residuals beyond 0.30·b are outliers
+    // and contribute a constant, bounding their leverage (robust fitting).
+    const double cap = 0.30;
+    const double cap2 = cap * cap;
+
+    double ssRes = 0.0; // squared geometric residual (px²) for R²
+    double cost = 0.0; // robust trimmed cost (dimensionless²)
+    for (int i = 0; i < n; i++) {
+      final qx = (ex[i] - x0).abs() / b; // fold to right flank by symmetry
+      final qz = (ey[i] - z0) / b;
+      final d2 = _distToProfile2(prof, qx, qz); // dimensionless²
+      ssRes += d2 * b * b;
+      cost += d2 < cap2 ? d2 : cap2;
+    }
+    final rms = math.sqrt(ssRes / n);
+    return _ResStats(cost / n, ssRes, rms);
   }
 
-  /// Extract contact angle from theoretical profile
-  static double _extractContactAngleFromProfile(
-      List<List<double>> profile, double targetHeightRatio) {
-    if (profile.length < 3) return 90.0;
+  /// Minimum squared distance (dimensionless) from query (qx,qz) to the
+  /// right-flank meridian polyline.
+  static double _distToProfile2(_Profile prof, double qx, double qz) {
+    final xs = prof.xs;
+    final zs = prof.zs;
+    double best = double.infinity;
+    for (int i = 0; i < xs.length - 1; i++) {
+      final d2 = _segDist2(qx, qz, xs[i], zs[i], xs[i + 1], zs[i + 1]);
+      if (d2 < best) best = d2;
+    }
+    return best;
+  }
 
-    final profileByZ = List<List<double>>.from(profile)
-      ..sort((a, b) => a[1].compareTo(b[1]));
-    final maxZ = profileByZ.map((p) => p[1]).reduce(math.max);
-    if (maxZ < 0.01) return 90.0;
+  static double _segDist2(double px, double pz, double ax, double az,
+      double bx, double bz) {
+    final dx = bx - ax;
+    final dz = bz - az;
+    final len2 = dx * dx + dz * dz;
+    double t = len2 > 1e-18 ? ((px - ax) * dx + (pz - az) * dz) / len2 : 0.0;
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    final cx = ax + t * dx;
+    final cz = az + t * dz;
+    final ex = px - cx;
+    final ez = pz - cz;
+    return ex * ex + ez * ez;
+  }
 
-    final targetZ = targetHeightRatio.clamp(1e-4, maxZ - 1e-4);
-    int idx = -1;
-    for (int i = 0; i < profileByZ.length - 1; i++) {
-      if (profileByZ[i][1] <= targetZ && targetZ <= profileByZ[i + 1][1]) {
+  /// Tangent angle phi (deg) at dimensionless height z, by interpolation on
+  /// the monotone-z profile. This is the contact angle at the baseline.
+  static double _angleAtHeight(_Profile prof, double z) {
+    final zs = prof.zs;
+    final phis = prof.phis;
+    if (zs.length < 2) return double.nan;
+    final zClamped = z.clamp(zs.first, zs.last);
+    int idx = zs.length - 2;
+    for (int i = 0; i < zs.length - 1; i++) {
+      if (zs[i] <= zClamped && zClamped <= zs[i + 1]) {
         idx = i;
         break;
       }
     }
-    if (idx < 0) {
-      idx = profileByZ.length - 2;
-    }
-
-    final i1 = math.max(0, idx - 1);
-    final i2 = math.min(profileByZ.length - 1, idx + 2);
-    double dx = profileByZ[i2][0] - profileByZ[i1][0];
-    double dz = profileByZ[i2][1] - profileByZ[i1][1];
-    if (dx.abs() < 1e-10 && dz.abs() < 1e-10) return 90.0;
-
-    // Contact angle = atan(dz/dx) relative to baseline
-    double slopeAngle = math.atan2(dz.abs(), dx.abs()) * 180.0 / math.pi;
-    double contactAngle = 90.0 + slopeAngle;
-
-    return math.max(0.0, math.min(180.0, contactAngle));
+    final z0 = zs[idx];
+    final z1 = zs[idx + 1];
+    final p0 = phis[idx];
+    final p1 = phis[idx + 1];
+    final t = (z1 - z0).abs() < 1e-12 ? 0.0 : (zClamped - z0) / (z1 - z0);
+    final phi = p0 + (p1 - p0) * t;
+    return (phi * 180.0 / math.pi).clamp(0.0, 180.0);
   }
 
-  /// Calculate RMS residual between profile and experimental points
-  static double _calculateProfileResidual(
-      List<List<double>> profile,
-      List<math.Point<double>> expPoints,
-      double centerX,
-      double baselineY,
-      double scale) {
-    final stats = _calculateProfileResidualStats(
-      profile,
-      expPoints,
-      centerX,
-      baselineY,
-      scale,
-    );
-    return stats['rms'] ?? double.infinity;
-  }
+  // --- Nelder–Mead simplex optimiser --------------------------------------
 
-  static Map<String, double> _calculateProfileResidualStats(
-    List<List<double>> profile,
-    List<math.Point<double>> expPoints,
-    double centerX,
-    double baselineY,
-    double scale,
-  ) {
-    if (profile.isEmpty || expPoints.isEmpty || scale <= 0) {
-      return {'rms': double.infinity, 'ss_res': double.infinity, 'count': 0.0};
+  static _NMResult _nelderMead(
+    List<double> start,
+    List<double> initialStep,
+    double Function(List<double>) f, {
+    int maxIter = 200,
+    double tol = 1e-7,
+  }) {
+    final n = start.length;
+    const alpha = 1.0, gamma = 2.0, rho = 0.5, sigma = 0.5;
+
+    // Build initial simplex.
+    final simplex = <List<double>>[];
+    final fvals = <double>[];
+    simplex.add(List<double>.from(start));
+    fvals.add(f(start));
+    for (int i = 0; i < n; i++) {
+      final pt = List<double>.from(start);
+      pt[i] += initialStep[i];
+      simplex.add(pt);
+      fvals.add(f(pt));
     }
 
-    final profileByZ = List<List<double>>.from(profile)
-      ..sort((a, b) => a[1].compareTo(b[1]));
-    final minZ = profileByZ.first[1];
-    final maxZ = profileByZ.last[1];
+    List<int> order() {
+      final idx = List<int>.generate(n + 1, (i) => i);
+      idx.sort((a, b) => fvals[a].compareTo(fvals[b]));
+      return idx;
+    }
 
-    double sumSq = 0.0;
-    int count = 0;
-    for (final exp in expPoints) {
-      final expX = (exp.x - centerX).abs() / scale;
-      final expZ = (baselineY - exp.y) / scale;
+    for (int iter = 0; iter < maxIter; iter++) {
+      final idx = order();
+      final best = idx.first;
+      final worst = idx.last;
+      final secondWorst = idx[idx.length - 2];
 
-      if (!expX.isFinite || !expZ.isFinite || expZ < minZ || expZ > maxZ) {
-        continue;
+      // Convergence: spread of function values is tiny.
+      if ((fvals[worst] - fvals[best]).abs() <=
+          tol * (fvals[best].abs() + tol)) {
+        break;
       }
 
-      final predX = _interpolateXAtZ(profileByZ, expZ);
-      if (!predX.isFinite) continue;
-      final dx = predX - expX;
-      sumSq += dx * dx;
-      count++;
-    }
+      // Centroid of all but the worst.
+      final centroid = List<double>.filled(n, 0.0);
+      for (int i = 0; i < simplex.length; i++) {
+        if (i == worst) continue;
+        for (int j = 0; j < n; j++) {
+          centroid[j] += simplex[i][j];
+        }
+      }
+      for (int j = 0; j < n; j++) {
+        centroid[j] /= n;
+      }
 
-    if (count == 0) {
-      return {'rms': double.infinity, 'ss_res': double.infinity, 'count': 0.0};
-    }
-    return {
-      'rms': math.sqrt(sumSq / count),
-      'ss_res': sumSq,
-      'count': count.toDouble(),
-    };
-  }
+      List<double> reflect(double coef) => List<double>.generate(
+          n, (j) => centroid[j] + coef * (centroid[j] - simplex[worst][j]));
 
-  static double _interpolateXAtZ(List<List<double>> profileByZ, double z) {
-    int lo = 0;
-    int hi = profileByZ.length - 1;
-    if (z < profileByZ[lo][1] || z > profileByZ[hi][1]) return double.nan;
+      final xr = reflect(alpha);
+      final fr = f(xr);
 
-    while (hi - lo > 1) {
-      final mid = (lo + hi) ~/ 2;
-      if (profileByZ[mid][1] <= z) {
-        lo = mid;
+      if (fr < fvals[best]) {
+        // Expansion.
+        final xe = reflect(gamma);
+        final fe = f(xe);
+        if (fe < fr) {
+          simplex[worst] = xe;
+          fvals[worst] = fe;
+        } else {
+          simplex[worst] = xr;
+          fvals[worst] = fr;
+        }
+      } else if (fr < fvals[secondWorst]) {
+        simplex[worst] = xr;
+        fvals[worst] = fr;
       } else {
-        hi = mid;
+        // Contraction.
+        final xc = reflect(rho);
+        final fc = f(xc);
+        if (fc < fvals[worst]) {
+          simplex[worst] = xc;
+          fvals[worst] = fc;
+        } else {
+          // Shrink toward the best.
+          for (int i = 0; i < simplex.length; i++) {
+            if (i == best) continue;
+            for (int j = 0; j < n; j++) {
+              simplex[i][j] =
+                  simplex[best][j] + sigma * (simplex[i][j] - simplex[best][j]);
+            }
+            fvals[i] = f(simplex[i]);
+          }
+        }
       }
     }
 
-    final z0 = profileByZ[lo][1];
-    final z1 = profileByZ[hi][1];
-    final x0 = profileByZ[lo][0];
-    final x1 = profileByZ[hi][0];
-    if ((z1 - z0).abs() < 1e-12) return (x0 + x1) / 2.0;
-    final t = (z - z0) / (z1 - z0);
-    return x0 * (1.0 - t) + x1 * t;
+    final idx = order();
+    return _NMResult(simplex[idx.first], fvals[idx.first]);
   }
+
+  // --- helpers ------------------------------------------------------------
+
+  static List<math.Point<double>> _subsample(
+      List<math.Point<double>> pts, int target) {
+    if (pts.length <= target) return pts;
+    final step = pts.length / target;
+    final out = <math.Point<double>>[];
+    for (double i = 0; i < pts.length; i += step) {
+      out.add(pts[i.floor()]);
+    }
+    return out;
+  }
+}
+
+class _Profile {
+  final List<double> xs;
+  final List<double> zs;
+  final List<double> phis;
+  _Profile(this.xs, this.zs, this.phis);
+}
+
+class _ResStats {
+  final double cost; // robust mean trimmed dimensionless cost
+  final double ssRes; // sum of squared geometric residuals (px²)
+  final double rms; // RMS geometric residual (px)
+  _ResStats(this.cost, this.ssRes, this.rms);
+}
+
+class _NMResult {
+  final List<double> params;
+  final double cost;
+  _NMResult(this.params, this.cost);
 }

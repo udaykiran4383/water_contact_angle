@@ -43,3 +43,12 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Generated analysis/test report artifacts (kept out of version control).
+# Tracked-on-purpose: PFOTES/ground_truth.csv (reference angles) and
+# scentific_output.csv (regression reference).
+scentific_output_current.csv
+pfotes_ground_truth_report.csv
+silhouette_adsa_report.csv
+comparison_report*.csv
+debug_output/

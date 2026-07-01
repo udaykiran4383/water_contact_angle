@@ -6,6 +6,16 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'image_processor.dart';
 
+import 'theme/app_theme.dart';
+import 'processing/silhouette_extractor.dart';
+import 'widgets/roi_select_screen.dart';
+import 'widgets/glass_card.dart';
+import 'widgets/gradient_button.dart';
+import 'widgets/image_preview_card.dart';
+import 'widgets/image_viewer.dart';
+import 'widgets/loading_overlay.dart';
+import 'widgets/result_card.dart';
+
 void main() {
   runApp(const MyApp());
 }
@@ -17,10 +27,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Water Contact Angle Analyzer',
-      theme: ThemeData(
-        primarySwatch: Colors.blue,
-        visualDensity: VisualDensity.adaptivePlatformDensity,
-      ),
+      theme: AppTheme.darkTheme,
       home: const HomePage(),
       debugShowCheckedModeBanner: false,
     );
@@ -51,29 +58,35 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<void> _pickImage(ImageSource source) async {
-    setState(() {
-      _isProcessing = true;
-      _resultText = 'Processing image...';
-      _latestResult = null;
-    });
-
     try {
+      // High resolution + near-lossless quality: the silhouette/ADSA precision
+      // scales with the number of edge pixels along the drop profile, so we
+      // keep the goniometer capture as detailed as practical.
       final XFile? pickedFile = await _picker.pickImage(
         source: source,
-        maxWidth: 1200,
-        maxHeight: 1200,
-        imageQuality: 85,
+        maxWidth: 2400,
+        maxHeight: 2400,
+        imageQuality: 100,
       );
 
       if (pickedFile != null) {
         File imageFile = File(pickedFile.path);
 
+        // Let the user optionally box the drop (excludes background features).
+        if (!mounted) return;
+        final selection = await showRoiSelector(context, imageFile);
+        if (!selection.proceed) return; // user backed out
+        final DropRoi? roi = selection.roi;
+
         setState(() {
+          _isProcessing = true;
+          _resultText = 'Processing image...';
+          _latestResult = null;
           _image = null;
           _annotatedImage = null;
         });
 
-        var result = await ImageProcessor.processImage(imageFile);
+        var result = await ImageProcessor.processImage(imageFile, roi: roi);
 
         if (!mounted) return;
 
@@ -179,8 +192,7 @@ class _HomePageState extends State<HomePage> {
       double n(String key) =>
           (_latestResult![key] as num?)?.toDouble() ?? double.nan;
       bool b(String key) =>
-          (_latestResult![key] as bool?) ??
-          ((_latestResult![key] as num?) == 1);
+          (_latestResult![key] as bool?) ?? ((_latestResult![key] as num?) == 1);
       String surface = _latestResult!['surface_type'] ?? '';
       int contourCount =
           (_latestResult!['contour_count'] as num?)?.toInt() ?? 0;
@@ -202,73 +214,34 @@ class _HomePageState extends State<HomePage> {
         escape(angle.isFinite ? angle.toStringAsFixed(6) : ''),
         escape(angle.isFinite ? angle.toStringAsExponential(3) : ''),
         escape(uncertainty.isFinite ? uncertainty.toStringAsFixed(6) : ''),
-        escape(
-            uncertainty.isFinite ? uncertainty.toStringAsExponential(3) : ''),
-        escape(n('theta_circle').isFinite
-            ? n('theta_circle').toStringAsFixed(6)
-            : ''),
-        escape(n('theta_ellipse').isFinite
-            ? n('theta_ellipse').toStringAsFixed(6)
-            : ''),
-        escape(
-            n('theta_poly').isFinite ? n('theta_poly').toStringAsFixed(6) : ''),
-        escape(n('theta_young_laplace').isFinite
-            ? n('theta_young_laplace').toStringAsFixed(6)
-            : ''),
+        escape(uncertainty.isFinite ? uncertainty.toStringAsExponential(3) : ''),
+        escape(n('theta_circle').isFinite ? n('theta_circle').toStringAsFixed(6) : ''),
+        escape(n('theta_ellipse').isFinite ? n('theta_ellipse').toStringAsFixed(6) : ''),
+        escape(n('theta_poly').isFinite ? n('theta_poly').toStringAsFixed(6) : ''),
+        escape(n('theta_young_laplace').isFinite ? n('theta_young_laplace').toStringAsFixed(6) : ''),
         escape(angleLeft.isFinite ? angleLeft.toStringAsFixed(6) : ''),
         escape(angleRight.isFinite ? angleRight.toStringAsFixed(6) : ''),
         escape(hysteresis.isFinite ? hysteresis.toStringAsFixed(6) : ''),
-        escape(n('r_squared_circle').isFinite
-            ? n('r_squared_circle').toStringAsFixed(6)
-            : ''),
-        escape(n('r_squared_ellipse').isFinite
-            ? n('r_squared_ellipse').toStringAsFixed(6)
-            : ''),
-        escape(n('r_squared_young_laplace').isFinite
-            ? n('r_squared_young_laplace').toStringAsFixed(6)
-            : ''),
-        escape(n('uncertainty_bootstrap').isFinite
-            ? n('uncertainty_bootstrap').toStringAsFixed(6)
-            : ''),
-        escape(n('uncertainty_method').isFinite
-            ? n('uncertainty_method').toStringAsFixed(6)
-            : ''),
-        escape(n('uncertainty_edge').isFinite
-            ? n('uncertainty_edge').toStringAsFixed(6)
-            : ''),
-        escape(n('bond_number_fit').isFinite
-            ? n('bond_number_fit').toStringAsExponential(6)
-            : ''),
-        escape(n('bond_number_physical').isFinite
-            ? n('bond_number_physical').toStringAsExponential(6)
-            : ''),
-        escape(n('bond_number_physical_uncertainty').isFinite
-            ? n('bond_number_physical_uncertainty').toStringAsExponential(6)
-            : ''),
-        escape(n('drop_radius_px').isFinite
-            ? n('drop_radius_px').toStringAsFixed(6)
-            : ''),
-        escape(n('drop_radius_mm').isFinite
-            ? n('drop_radius_mm').toStringAsFixed(6)
-            : ''),
+        escape(n('r_squared_circle').isFinite ? n('r_squared_circle').toStringAsFixed(6) : ''),
+        escape(n('r_squared_ellipse').isFinite ? n('r_squared_ellipse').toStringAsFixed(6) : ''),
+        escape(n('r_squared_young_laplace').isFinite ? n('r_squared_young_laplace').toStringAsFixed(6) : ''),
+        escape(n('uncertainty_bootstrap').isFinite ? n('uncertainty_bootstrap').toStringAsFixed(6) : ''),
+        escape(n('uncertainty_method').isFinite ? n('uncertainty_method').toStringAsFixed(6) : ''),
+        escape(n('uncertainty_edge').isFinite ? n('uncertainty_edge').toStringAsFixed(6) : ''),
+        escape(n('bond_number_fit').isFinite ? n('bond_number_fit').toStringAsExponential(6) : ''),
+        escape(n('bond_number_physical').isFinite ? n('bond_number_physical').toStringAsExponential(6) : ''),
+        escape(n('bond_number_physical_uncertainty').isFinite ? n('bond_number_physical_uncertainty').toStringAsExponential(6) : ''),
+        escape(n('drop_radius_px').isFinite ? n('drop_radius_px').toStringAsFixed(6) : ''),
+        escape(n('drop_radius_mm').isFinite ? n('drop_radius_mm').toStringAsFixed(6) : ''),
         escape(scaleCalibrated ? 'true' : 'false'),
-        escape(n('scale_relative_uncertainty').isFinite
-            ? n('scale_relative_uncertainty').toStringAsFixed(6)
-            : ''),
+        escape(n('scale_relative_uncertainty').isFinite ? n('scale_relative_uncertainty').toStringAsFixed(6) : ''),
         escape((_latestResult!['scale_source'] as String?) ?? ''),
-        escape(n('pixel_size_um').isFinite
-            ? n('pixel_size_um').toStringAsFixed(6)
-            : ''),
-        escape(n('meters_per_pixel').isFinite
-            ? n('meters_per_pixel').toStringAsExponential(6)
-            : ''),
+        escape(n('pixel_size_um').isFinite ? n('pixel_size_um').toStringAsFixed(6) : ''),
+        escape(n('meters_per_pixel').isFinite ? n('meters_per_pixel').toStringAsExponential(6) : ''),
         escape(surface),
         escape(contourCount.toString()),
-        escape(
-            n('baseline_y').isFinite ? n('baseline_y').toStringAsFixed(6) : ''),
-        escape(n('baseline_tilt').isFinite
-            ? n('baseline_tilt').toStringAsFixed(6)
-            : ''),
+        escape(n('baseline_y').isFinite ? n('baseline_y').toStringAsFixed(6) : ''),
+        escape(n('baseline_tilt').isFinite ? n('baseline_tilt').toStringAsFixed(6) : ''),
         escape(annotatedPath),
       ].join(',');
 
@@ -287,375 +260,226 @@ class _HomePageState extends State<HomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.grey[50],
+      extendBodyBehindAppBar: true,
       appBar: AppBar(
         title: const Text('Contact Angle Analyzer'),
-        backgroundColor: Colors.blue[700],
-        foregroundColor: Colors.white,
-        elevation: 2,
+        backgroundColor: Colors.transparent,
+        elevation: 0,
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Header
-            Container(
-              padding: const EdgeInsets.all(20),
-              decoration: BoxDecoration(
-                color: Colors.blue[50],
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.blue[200]!),
-              ),
+      body: Stack(
+        children: [
+          // Background Gradient
+          Container(
+            decoration: const BoxDecoration(
+              gradient: AppTheme.backgroundGradient,
+            ),
+          ),
+
+          SafeArea(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(16.0),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Icon(Icons.water_drop, size: 48, color: Colors.blue[700]),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Sessile Drop Analysis',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.blue[800],
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Automated contact angle measurement for surface science',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.blue[600],
-                    ),
-                    textAlign: TextAlign.center,
-                  ),
-                  const SizedBox(height: 8),
-                  // Show filename when available
-                  if (_image != null)
-                    Text(
-                      'File: ${_image!.path.split('/').last}',
-                      style: TextStyle(fontSize: 12, color: Colors.grey[700]),
-                    ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 24),
-
-            // Action Buttons
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _isProcessing
-                        ? null
-                        : () => _pickImage(ImageSource.gallery),
-                    icon: const Icon(Icons.photo_library),
-                    label: const Text('Gallery'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green[600],
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _isProcessing
-                        ? null
-                        : () => _pickImage(ImageSource.camera),
-                    icon: const Icon(Icons.camera_alt),
-                    label: const Text('Camera'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blue[600],
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 24),
-
-            // Processing Status
-            if (_isProcessing)
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.orange[50],
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.orange[200]!),
-                ),
-                child: Row(
-                  children: [
-                    SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor:
-                            AlwaysStoppedAnimation<Color>(Colors.orange[700]!),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Analyzing droplet...\nThis may take 2-5 seconds',
-                        style: TextStyle(color: Colors.orange[800]),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-            // Results Display
-            if (!_isProcessing && _resultText != null)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.1),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
-                    ),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Analysis Results',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.grey[800],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      _resultText!,
-                      style: TextStyle(
-                        fontSize: 16,
-                        height: 1.4,
-                        color: Colors.grey[700],
-                      ),
-                    ),
-
-                    // Scientific display of angle
-                    if (_latestResult != null &&
-                        _latestResult!['angle_numeric'] != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 12.0),
-                        child: Text(
-                          'Angle (scientific): ${((_latestResult!['angle_numeric'] as num).toDouble()).toStringAsExponential(3)}°',
-                          style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.grey[800]),
+                  // Header
+                  GlassCard(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: AppTheme.tealAccent.withValues(alpha: 0.15),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.water_drop, size: 48, color: AppTheme.tealAccent),
                         ),
-                      ),
-
-                    if (_latestResult != null &&
-                        _latestResult!['bond_number_physical'] != null)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 6.0),
-                        child: Text(
-                          'Bo (physical): ${((_latestResult!['bond_number_physical'] as num).toDouble()).toStringAsExponential(3)}'
-                          ' | Radius: ${((_latestResult!['drop_radius_mm'] as num?)?.toDouble() ?? double.nan).isFinite ? ((_latestResult!['drop_radius_mm'] as num).toDouble()).toStringAsFixed(4) : 'N/A'} mm'
-                          ' | Scale: ${((_latestResult!['pixel_size_um'] as num?)?.toDouble() ?? double.nan).isFinite ? ((_latestResult!['pixel_size_um'] as num).toDouble()).toStringAsFixed(3) : 'N/A'} um/px'
-                          ' (${(_latestResult!['scale_source'] as String?) ?? 'fallback_approximate'})',
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Sessile Drop Analysis',
                           style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.grey[800],
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
+                            letterSpacing: 0.5,
                           ),
                         ),
-                      ),
-
-                    const SizedBox(height: 8),
-
-                    // Export CSV button
-                    if (_latestResult != null)
-                      ElevatedButton.icon(
-                        onPressed: _exportResultsToCSV,
-                        icon: const Icon(Icons.file_download),
-                        label: const Text('Export Results (CSV)'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.teal[600],
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(
-                              vertical: 12, horizontal: 16),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Automated scientific measurement',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: AppTheme.textSecondary,
                           ),
+                          textAlign: TextAlign.center,
                         ),
-                      ),
-                  ],
-                ),
-              ),
-
-            // Original Image
-            if (_image != null && !_isProcessing)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+                        if (_image != null) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            'File: ${_image!.path.split('/').last}',
+                            style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                   const SizedBox(height: 24),
-                  Text(
-                    'Original Image',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[700],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    height: 250,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey[300]!),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        _image!,
-                        fit: BoxFit.contain,
-                        width: double.infinity,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
 
-            // Annotated Image + Save Button
-            if (_annotatedImage != null && !_isProcessing)
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const SizedBox(height: 24),
-                  Text(
-                    'Annotated Analysis',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.grey[700],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'Green: Droplet boundary | Red: Baseline | Purple: Contact points & fit',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.grey[500],
-                      fontStyle: FontStyle.italic,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    height: 250,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey[300]!),
-                    ),
-                    child: ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        _annotatedImage!,
-                        fit: BoxFit.contain,
-                        width: double.infinity,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
+                  // Action Buttons
                   Row(
                     children: [
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: _saveAnnotatedImage,
-                          icon: const Icon(Icons.download),
-                          label: const Text("Save Annotated Image"),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.purple[600],
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                          ),
-                        ),
+                      GradientButton(
+                        onPressed: _isProcessing ? null : () => _pickImage(ImageSource.gallery),
+                        icon: Icons.photo_library,
+                        label: 'Gallery',
                       ),
-                      const SizedBox(width: 12),
-                      // Quick export CSV next to save
-                      if (_latestResult != null)
-                        SizedBox(
-                          width: 160,
-                          child: ElevatedButton.icon(
-                            onPressed: _exportResultsToCSV,
-                            icon: const Icon(Icons.insert_drive_file),
-                            label: const Text('CSV'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.indigo[600],
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 14),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
-                          ),
-                        ),
+                      const SizedBox(width: 16),
+                      GradientButton(
+                        onPressed: _isProcessing ? null : () => _pickImage(ImageSource.camera),
+                        icon: Icons.camera_alt,
+                        label: 'Camera',
+                        colors: const [Colors.deepPurpleAccent, Colors.purpleAccent],
+                      ),
                     ],
                   ),
-                ],
-              ),
+                  const SizedBox(height: 24),
 
-            // Usage Tips
-            const SizedBox(height: 24),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.amber[50],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.amber[200]!),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    '📸 Tips for Best Results',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.amber[800],
+                  // Results Display (Using the new dark mode widget)
+                  if (!_isProcessing && _latestResult != null) ...[
+                    ResultCard(results: _latestResult!),
+                    const SizedBox(height: 24),
+                  ] else if (!_isProcessing && _resultText != null) ...[
+                    // Fallback for simple error texts
+                    GlassCard(
+                      padding: const EdgeInsets.all(20),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.error_outline, color: AppTheme.amberWarn),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Text(
+                              _resultText!,
+                              style: const TextStyle(color: Colors.white70),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    '• Use backlit droplet images (silhouette against bright background)\n'
-                    '• Ensure droplet is centered and touches clear surface\n'
-                    '• Avoid glare and reflections on droplet surface\n'
-                    '• Higher resolution images improve accuracy\n'
-                    '• Expected angles: 0-180° (0°=complete wetting, 180°=superhydrophobic)',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: Colors.amber[700],
-                      height: 1.3,
+                    const SizedBox(height: 24),
+                  ],
+
+                  // Original Image
+                  if (_image != null && !_isProcessing) ...[
+                    GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ImageViewerScreen(
+                              image: FileImage(_image!),
+                              title: 'Original Image',
+                            ),
+                          ),
+                        );
+                      },
+                      child: ImagePreviewCard(
+                        image: Image.file(_image!, fit: BoxFit.cover, width: double.infinity),
+                        label: 'Original Image',
+                        glowColor: Colors.blueAccent,
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 24),
+                  ],
+
+                  // Annotated Image
+                  if (_annotatedImage != null && !_isProcessing) ...[
+                    GestureDetector(
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => ImageViewerScreen(
+                              image: FileImage(_annotatedImage!),
+                              title: 'Annotated Analysis',
+                            ),
+                          ),
+                        );
+                      },
+                      child: ImagePreviewCard(
+                        image: Image.file(_annotatedImage!, fit: BoxFit.cover, width: double.infinity),
+                        label: 'Annotated Result',
+                        glowColor: AppTheme.tealAccent,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        GradientButton(
+                          onPressed: _saveAnnotatedImage,
+                          icon: Icons.download,
+                          label: 'Save Image',
+                          colors: const [AppTheme.tealAccent, AppTheme.cyanLight],
+                        ),
+                        const SizedBox(width: 16),
+                        if (_latestResult != null)
+                          GradientButton(
+                            onPressed: _exportResultsToCSV,
+                            icon: Icons.insert_drive_file,
+                            label: 'Export CSV',
+                            colors: const [Colors.amber, Colors.deepOrange],
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+                  ],
+
+                  // Usage Tips
+                  if (_latestResult == null && !_isProcessing) ...[
+                    GlassCard(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: const [
+                              Icon(Icons.lightbulb_outline, color: AppTheme.amberWarn, size: 18),
+                              SizedBox(width: 8),
+                              Text(
+                                'Tips for Best Results',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.amberWarn,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          const Text(
+                            '• Use backlit droplet images (silhouette against bright background)\n'
+                            '• Ensure droplet is centered and touches clear surface\n'
+                            '• Avoid glare and reflections on droplet surface\n'
+                            '• Higher resolution images improve accuracy',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: AppTheme.textSecondary,
+                              height: 1.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 40),
                 ],
               ),
             ),
-            const SizedBox(height: 20),
-          ],
-        ),
+          ),
+
+          // Loading Overlay
+          if (_isProcessing)
+            const LoadingOverlay(message: 'Analyzing droplet...'),
+        ],
       ),
     );
   }

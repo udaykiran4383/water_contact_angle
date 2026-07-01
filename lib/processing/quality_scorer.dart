@@ -102,6 +102,14 @@ class QualityScorer {
       }
     }
 
+    // 4b. Contact point confidence from detector consensus.
+    final contactConf = _clamp01(
+      _safeNum(results, 'contact_confidence', fallback: 0.45),
+    );
+    if (contactConf < 0.3) {
+      warnings.add('⚠️ Ambiguous contact line — reflections/noise likely.');
+    }
+
     // 5. Method symmetry
     // Count valid fitting methods; more = higher confidence.
     int validCount = 0;
@@ -111,10 +119,19 @@ class QualityScorer {
         if (entry is Map && entry['is_valid'] == true) validCount++;
       }
     }
-    final symmetryScore = _clamp01(validCount / 3.0);
+    final modelDiversityScore = _clamp01(validCount / 3.0);
+    final geometrySymmetry = _clamp01(
+      _safeNum(results, 'symmetry_score', fallback: 0.5),
+    );
+    final symmetryScore = _clamp01(
+      0.55 * modelDiversityScore + 0.45 * geometrySymmetry,
+    );
     if (validCount < 2) {
       warnings.add('⚠️ Few valid fitting methods — '
           'consider higher resolution or better contrast.');
+    }
+    if (geometrySymmetry < 0.25) {
+      warnings.add('⚠️ Low geometric symmetry — drop may be non-axisymmetric.');
     }
 
     // Check for polynomial-only fit
@@ -158,7 +175,8 @@ class QualityScorer {
       0.25 * baselineConf +
           0.15 * slopeStability +
           0.15 * blurQuality +
-          0.20 * contourSmoothness +
+          0.15 * contourSmoothness +
+          0.10 * contactConf +
           0.15 * symmetryScore +
           0.10 * interFrameVar,
     );

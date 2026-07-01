@@ -75,26 +75,46 @@ class AngleUtils {
     }
   }
 
-  /// Calculate R² for circle fit
+  /// Geometric R² for the circle fit: orthogonal (radial) residuals against the
+  /// total spatial variance of the points about their centroid.
+  ///
+  ///   R² = 1 − Σ(dᵢ − r)² / Σ‖pᵢ − p̄‖²
+  ///
+  /// The previous implementation used a *radial-variance* ratio
+  /// (SS_tot = Σ(dᵢ − d̄)²). For a clean, near-perfect arc every dᵢ ≈ r, so that
+  /// SS_tot collapses toward zero and the ratio becomes numerically ill-posed —
+  /// excellent circle fits scored ~0 and were rejected by the R² gate. That is
+  /// exactly backwards: the cleaner the circle, the more it was penalised. The
+  /// geometric form below is well-conditioned (SS_tot is the point cloud's
+  /// spread, which is large for any real arc) and is directly comparable to the
+  /// ellipse and Young–Laplace geometric R², so the ensemble weights all methods
+  /// on the same scale.
   static double _calculateCircleRSquared(
       List<double> xs, List<double> ys, double cx, double cy, double r) {
     int n = xs.length;
     if (n < 3 || !r.isFinite || r <= 0) return 0.0;
 
-    // For circular-arc data, classical variance-based R² is unstable because
-    // radial distances have very low spread. Use normalized radial RMSE instead.
-    double sumSqResidual = 0.0;
+    double meanX = 0.0, meanY = 0.0;
     for (int i = 0; i < n; i++) {
-      final dist = math.sqrt(math.pow(xs[i] - cx, 2) + math.pow(ys[i] - cy, 2));
-      final err = dist - r;
-      sumSqResidual += err * err;
+      meanX += xs[i];
+      meanY += ys[i];
+    }
+    meanX /= n;
+    meanY /= n;
+
+    double ssRes = 0.0, ssTot = 0.0;
+    for (int i = 0; i < n; i++) {
+      final d = math.sqrt((xs[i] - cx) * (xs[i] - cx) +
+          (ys[i] - cy) * (ys[i] - cy));
+      final rr = d - r;
+      ssRes += rr * rr;
+      final dx = xs[i] - meanX, dy = ys[i] - meanY;
+      ssTot += dx * dx + dy * dy;
     }
 
-    final rmse = math.sqrt(sumSqResidual / n);
-    final normalizedRmse = rmse / math.max(1.0, r.abs());
-    final rSq = math.exp(-25.0 * normalizedRmse * normalizedRmse);
-
-    return math.max(0.0, math.min(1.0, rSq));
+    if (ssTot < 1e-12) return 0.0;
+    final rSq = 1.0 - (ssRes / ssTot);
+    return rSq.clamp(0.0, 1.0);
   }
 
   /// Ellipse fitting using Direct Least Squares method (Fitzgibbon et al.)
@@ -173,8 +193,11 @@ class AngleUtils {
       var constraintInv = _invert3x3(constraint);
       var constraintInvM = _multiply3x3(constraintInv, m);
 
-      // Find eigenvector for positive eigenvalue (power iteration)
-      List<double> a1 = _powerIteration(constraintInvM);
+      // Halir–Flusser: the ellipse solution is the eigenvector of C⁻¹M that
+      // satisfies the constraint 4AC − B² > 0 (i.e. aᵀ C a > 0). This is NOT in
+      // general the dominant eigenvector, so a plain power iteration returns the
+      // wrong conic (typically a hyperbola/saddle). Select by the constraint.
+      List<double> a1 = _selectEllipseEigenvector(constraintInvM);
 
       // Get a2 = T * a1
       List<double> a2 = [0.0, 0.0, 0.0];
@@ -184,42 +207,26 @@ class AngleUtils {
         }
       }
 
-      // Conic coefficients: [A, B, C, D, E, F]
-      double aCoeff = a1[0], bCoeff = a1[1], cConic = a1[2];
-      double dCoeff = a2[0], eCoeff = a2[1], fCoeff = a2[2];
+      // Conic coefficients in NORMALIZED coordinates: [A, B, C, D, E, F].
+      final double aCoeff = a1[0], bCoeff = a1[1], cConic = a1[2];
+      final double dCoeff = a2[0], eCoeff = a2[1], fCoeff = a2[2];
 
-      // Convert back from normalized coordinates
-      aCoeff = aCoeff / (scale * scale);
-      bCoeff = bCoeff / (scale * scale);
-      cConic = cConic / (scale * scale);
-      dCoeff = dCoeff / scale -
-          2.0 * aCoeff * meanX / scale -
-          bCoeff * meanY / scale;
-      eCoeff = eCoeff / scale -
-          2.0 * cConic * meanY / scale -
-          bCoeff * meanX / scale;
-      fCoeff = fCoeff +
-          aCoeff * meanX * meanX +
-          bCoeff * meanX * meanY +
-          cConic * meanY * meanY -
-          dCoeff * meanX -
-          eCoeff * meanY;
+      // Extract ellipse geometry in normalized space, then map the parameters
+      // (not the raw conic coefficients) back to image coordinates. Denormalizing
+      // the conic algebraically is error-prone; transforming center/axes is exact
+      // and robust: p = p_n·scale + mean, axes ·= scale, rotation unchanged.
+      final pn = _conicToEllipse(
+          aCoeff, bCoeff, cConic, dCoeff, eCoeff, fCoeff);
+      final cx = pn[0] * scale + meanX;
+      final cy = pn[1] * scale + meanY;
+      final aAxis = pn[2] * scale;
+      final bAxis = pn[3] * scale;
+      final theta = pn[4];
 
-      // Extract ellipse parameters from conic form
-      var params = _conicToEllipse(
-        aCoeff,
-        bCoeff,
-        cConic,
-        dCoeff,
-        eCoeff,
-        fCoeff,
-      );
+      final double rSquared =
+          _calculateEllipseRSquared(xs, ys, cx, cy, aAxis, bAxis, theta);
 
-      // Calculate R² for ellipse fit
-      double rSquared = _calculateEllipseRSquared(
-          xs, ys, params[0], params[1], params[2], params[3], params[4]);
-
-      return [params[0], params[1], params[2], params[3], params[4], rSquared];
+      return [cx, cy, aAxis, bAxis, theta, rSquared];
     } catch (e) {
       // Fallback to circle fit
       var circle = circleFit(xs, ys);
@@ -230,12 +237,17 @@ class AngleUtils {
   /// Convert conic form Ax² + Bxy + Cy² + Dx + Ey + F = 0 to ellipse parameters
   static List<double> _conicToEllipse(double aCoeff, double bCoeff,
       double cCoeff, double dCoeff, double eCoeff, double fCoeff) {
-    // Center
+    // Center of the conic Ax²+Bxy+Cy²+Dx+Ey+F=0:
+    //   x_c = (2CD − BE)/(B² − 4AC),  y_c = (2AE − BD)/(B² − 4AC).
+    // The previous code divided by −(B²−4AC), reflecting the center through the
+    // origin — every derived quantity (semi-axes via fPrime, rotation, R²,
+    // contact tangent) was then computed at the wrong center, collapsing the
+    // ellipse fit's R² so it was always rejected.
     double denom = bCoeff * bCoeff - 4.0 * aCoeff * cCoeff;
-    if (denom.abs() < 1e-12) denom = 1e-12;
+    if (denom.abs() < 1e-12) denom = denom < 0 ? -1e-12 : 1e-12;
 
-    double cx = (2.0 * cCoeff * dCoeff - bCoeff * eCoeff) / (-denom);
-    double cy = (2.0 * aCoeff * eCoeff - bCoeff * dCoeff) / (-denom);
+    double cx = (2.0 * cCoeff * dCoeff - bCoeff * eCoeff) / denom;
+    double cy = (2.0 * aCoeff * eCoeff - bCoeff * dCoeff) / denom;
 
     // Rotation angle
     double theta = 0.0;
@@ -276,41 +288,53 @@ class AngleUtils {
     return [cx, cy, a, b, theta];
   }
 
-  /// Calculate R² for ellipse fit
+  /// Standard geometric R² for the ellipse fit:
+  ///   R² = 1 − SS_res / SS_tot
+  /// where SS_res is the sum of squared *orthogonal* (true closest-point)
+  /// distances from each data point to the ellipse, and SS_tot is the total
+  /// squared spread of the data about its centroid. This is the conventional
+  /// coefficient of determination (replacing an ad-hoc exp(−res) surrogate
+  /// that systematically inflated apparent fit quality).
   static double _calculateEllipseRSquared(List<double> xs, List<double> ys,
       double cx, double cy, double a, double b, double theta) {
     int n = xs.length;
     if (n < 5 || a <= 0 || b <= 0) return 0.0;
 
-    double cosT = math.cos(-theta);
-    double sinT = math.sin(-theta);
+    final double cosT = math.cos(-theta);
+    final double sinT = math.sin(-theta);
 
-    List<double> distances = [];
+    // Data centroid (image frame) for SS_tot.
+    double mx = 0.0, my = 0.0;
     for (int i = 0; i < n; i++) {
-      // Rotate point to ellipse coordinate system
-      double dx = xs[i] - cx;
-      double dy = ys[i] - cy;
-      double xr = dx * cosT - dy * sinT;
-      double yr = dx * sinT + dy * cosT;
+      mx += xs[i];
+      my += ys[i];
+    }
+    mx /= n;
+    my /= n;
 
-      // Distance from ellipse (approximate using scaling)
-      double t = math.atan2(yr / b, xr / a);
-      double ex = a * math.cos(t);
-      double ey = b * math.sin(t);
-      distances.add(math.sqrt(math.pow(xr - ex, 2) + math.pow(yr - ey, 2)));
+    double ssRes = 0.0, ssTot = 0.0;
+    for (int i = 0; i < n; i++) {
+      // Rotate point into the ellipse-aligned frame.
+      final dx = xs[i] - cx;
+      final dy = ys[i] - cy;
+      final xr = dx * cosT - dy * sinT;
+      final yr = dx * sinT + dy * cosT;
+
+      // True closest point on the ellipse via Newton on the parameter t.
+      final t = _closestEllipseParameter(xr, yr, a, b);
+      final ex = a * math.cos(t);
+      final ey = b * math.sin(t);
+      final rdx = xr - ex;
+      final rdy = yr - ey;
+      ssRes += rdx * rdx + rdy * rdy;
+
+      final tdx = xs[i] - mx;
+      final tdy = ys[i] - my;
+      ssTot += tdx * tdx + tdy * tdy;
     }
 
-    double ssRes = 0.0;
-    for (var d in distances) {
-      ssRes += d * d;
-    }
-
-    // For a perfect fit, all distances should be zero
-    // Use modified R² based on normalized residuals
-    double avgRadius = (a + b) / 2.0;
-    double normalizedRes = ssRes / (n * avgRadius * avgRadius);
-    double rSq = math.exp(-normalizedRes * 10); // Exponential decay
-
+    if (ssTot < 1e-12) return ssRes < 1e-12 ? 1.0 : 0.0;
+    final rSq = 1.0 - (ssRes / ssTot);
     return math.max(0.0, math.min(1.0, rSq));
   }
 
@@ -330,9 +354,9 @@ class AngleUtils {
     double xr = dx * cosT - dy * sinT;
     double yr = dx * sinT + dy * cosT;
 
-    // Find point on ellipse closest to contact point
-    // Using parametric form: x = a*cos(t), y = b*sin(t)
-    double t = math.atan2(yr * a, xr * b);
+    // Find the true closest point on the ellipse by minimizing squared
+    // distance in the ellipse frame.
+    double t = _closestEllipseParameter(xr, yr, a, b);
 
     // Tangent at this point: dx/dt = -a*sin(t), dy/dt = b*cos(t)
     double dxdt = -a * math.sin(t);
@@ -342,18 +366,7 @@ class AngleUtils {
     double tanX = dxdt * math.cos(theta) - dydt * math.sin(theta);
     double tanY = dxdt * math.sin(theta) + dydt * math.cos(theta);
 
-    // Angle of tangent with respect to horizontal
-    double tangentAngle = math.atan2(-tanY, tanX) * 180.0 / math.pi;
-
-    // Contact angle
-    double contactAngle;
-    if (isLeftSide) {
-      contactAngle = 180.0 - tangentAngle;
-    } else {
-      contactAngle = tangentAngle;
-    }
-
-    return math.max(0.0, math.min(180.0, contactAngle));
+    return _contactAngleFromTangentVector(tanX, tanY, isLeftSide);
   }
 
   /// Calculate contact angle from circle geometry.
@@ -401,6 +414,7 @@ class AngleUtils {
     bool isLeftSide, {
     int degree = 4,
     bool useWeighting = true,
+    double? contactSpan,
   }) {
     if (points.length < 4) {
       return {
@@ -423,6 +437,9 @@ class AngleUtils {
       List<double> independent = [];
       List<double> dependent = [];
       List<double> weights = [];
+      final radialScale =
+          ((contactSpan?.abs() ?? math.max(deltaX, deltaY)) * 0.25)
+              .clamp(8.0, 72.0);
 
       for (final p in points) {
         if (fitXasFunctionOfY) {
@@ -437,55 +454,78 @@ class AngleUtils {
           double dx = p.x - contactX;
           double dy = p.y - contactY;
           double radialDistance = math.sqrt(dx * dx + dy * dy);
-          // Favor points close to the contact region for tangent estimation.
-          weights.add(math.exp(-radialDistance / 28.0));
+          // Scale the decay with the observed contact span so small drops do not
+          // get over-smoothed and large drops do not overfit the contact noise.
+          weights.add(math.exp(-radialDistance / radialScale));
         } else {
           weights.add(1.0);
         }
       }
 
       int maxDegree = math.min(5, degree);
-      int fitDegree = math.min(maxDegree, points.length - 2);
-      fitDegree = math.max(2, fitDegree);
+      int fitDegree = math.max(2, math.min(maxDegree, points.length - 2));
 
-      final fit = _fitWeightedPolynomialNormalized(
-        independent,
-        dependent,
-        weights,
-        fitDegree,
-      );
-      final coeffs = fit['coeffs']! as List<double>;
-      double xMean = fit['x_mean']! as double;
-      double xScale = fit['x_scale']! as double;
-      double fitRSquared = fit['r_squared']! as double;
+      Map<String, double> evaluateFit(int requestedDegree) {
+        final fit = _fitWeightedPolynomialNormalized(
+          independent,
+          dependent,
+          weights,
+          requestedDegree,
+        );
+        final coeffs = fit['coeffs']! as List<double>;
+        final xMean = fit['x_mean']! as double;
+        final xScale = fit['x_scale']! as double;
+        final fitRSquared = fit['r_squared']! as double;
 
-      double contactIndependent = fitXasFunctionOfY ? contactY : contactX;
-      double normalizedContact = (contactIndependent - xMean) / xScale;
-      double slopeLocal =
-          _evaluatePolynomialDerivative(coeffs, normalizedContact) / xScale;
+        final contactIndependent = fitXasFunctionOfY ? contactY : contactX;
+        final normalizedContact = (contactIndependent - xMean) / xScale;
+        final slopeLocal =
+            _evaluatePolynomialDerivative(coeffs, normalizedContact) / xScale;
 
-      double dyDx;
-      if (fitXasFunctionOfY) {
-        if (slopeLocal.abs() < 1e-8) {
-          dyDx = slopeLocal >= 0 ? 1e8 : -1e8;
+        double dyDx;
+        if (fitXasFunctionOfY) {
+          if (slopeLocal.abs() < 1e-8) {
+            dyDx = slopeLocal >= 0 ? 1e8 : -1e8;
+          } else {
+            dyDx = 1.0 / slopeLocal;
+          }
         } else {
-          dyDx = 1.0 / slopeLocal;
+          dyDx = slopeLocal;
         }
-      } else {
-        dyDx = slopeLocal;
+
+        return {
+          'angle': _contactAngleFromSlope(dyDx, isLeftSide),
+          'r_squared': fitRSquared,
+          'fit_degree': requestedDegree.toDouble(),
+        };
       }
 
-      double angleRad = math.atan(dyDx.abs());
-      double angleDeg = angleRad * 180.0 / math.pi;
-      bool isInteriorAngle =
-          (isLeftSide && dyDx > 0) || (!isLeftSide && dyDx < 0);
-
-      double finalAngle = isInteriorAngle ? angleDeg : 180.0 - angleDeg;
-      finalAngle = math.max(0.0, math.min(180.0, finalAngle));
+      final lowOrder = evaluateFit(2);
+      Map<String, double> chosen = lowOrder;
+      if (fitDegree > 2) {
+        final highOrder = evaluateFit(fitDegree);
+        final lowAngle = lowOrder['angle']!;
+        final highAngle = highOrder['angle']!;
+        if (!lowAngle.isFinite && highAngle.isFinite) {
+          chosen = highOrder;
+        } else if (lowAngle.isFinite && highAngle.isFinite) {
+          if ((highAngle - lowAngle).abs() <= 3.0) {
+            chosen = {
+              'angle': (lowAngle + highAngle) * 0.5,
+              'r_squared':
+                  ((lowOrder['r_squared']! + highOrder['r_squared']!) * 0.5)
+                      .clamp(0.0, 1.0),
+              'fit_degree': fitDegree.toDouble(),
+            };
+          } else {
+            chosen = lowOrder;
+          }
+        }
+      }
 
       return {
-        'angle': finalAngle,
-        'r_squared': fitRSquared,
+        'angle': chosen['angle']!,
+        'r_squared': chosen['r_squared']!,
         'used_points': points.length.toDouble(),
       };
     } catch (_) {
@@ -495,6 +535,177 @@ class AngleUtils {
         'used_points': points.length.toDouble(),
       };
     }
+  }
+
+  /// Robust local tangent estimate using weighted orthogonal regression (PCA).
+  ///
+  /// This method is less sensitive to global contour contamination and serves as
+  /// a reliable fallback when higher-order polynomial fits become unstable.
+  ///
+  /// Returns:
+  /// - `angle`: contact angle in degrees
+  /// - `r_squared`: local linearity score (0..1)
+  /// - `used_points`: number of points used
+  /// - `slope`: tangent slope dy/dx (can be +/-infinity)
+  static Map<String, double> localTangentAngleDetailed(
+    List<math.Point<double>> points,
+    double contactX,
+    double contactY,
+    bool isLeftSide, {
+    int maxPoints = 34,
+  }) {
+    if (points.length < 4) {
+      return {
+        'angle': 90.0,
+        'r_squared': 0.0,
+        'used_points': points.length.toDouble(),
+        'slope': double.nan,
+      };
+    }
+
+    var source = points.where((p) => p.y <= contactY - 0.6).toList();
+    if (source.length < 4) {
+      source = points.where((p) => p.y <= contactY + 0.2).toList();
+    }
+    if (source.length < 4) {
+      source = points;
+    }
+
+    final scored = source.map((p) {
+      final dx = p.x - contactX;
+      final dy = p.y - contactY;
+      final radial = math.sqrt(dx * dx + dy * dy);
+      return {'p': p, 'dist': radial};
+    }).toList()
+      ..sort((a, b) => (a['dist'] as double).compareTo(b['dist'] as double));
+
+    final takeN =
+        math.min(maxPoints, math.max(8, (source.length * 0.70).round()));
+    final local =
+        scored.take(takeN).map((e) => e['p'] as math.Point<double>).toList();
+    if (local.length < 4) {
+      return {
+        'angle': 90.0,
+        'r_squared': 0.0,
+        'used_points': local.length.toDouble(),
+        'slope': double.nan,
+      };
+    }
+
+    // Weighted centroid around the contact region.
+    double wSum = 0.0;
+    double meanX = 0.0;
+    double meanY = 0.0;
+    final weights = <double>[];
+    for (final p in local) {
+      final dx = p.x - contactX;
+      final dy = p.y - contactY;
+      final radial = math.sqrt(dx * dx + dy * dy);
+      final baselineClearance = (contactY - p.y).clamp(0.0, 18.0);
+      final clearanceWeight = 0.55 + 0.45 * (baselineClearance / 18.0);
+      final w = math.exp(-radial / 24.0) *
+          math.exp(-p.y.abs() / 42.0) *
+          clearanceWeight;
+      weights.add(w);
+      wSum += w;
+      meanX += w * p.x;
+      meanY += w * p.y;
+    }
+    if (wSum <= 1e-10) {
+      return {
+        'angle': 90.0,
+        'r_squared': 0.0,
+        'used_points': local.length.toDouble(),
+        'slope': double.nan,
+      };
+    }
+    meanX /= wSum;
+    meanY /= wSum;
+
+    // Weighted covariance matrix.
+    double sxx = 0.0;
+    double syy = 0.0;
+    double sxy = 0.0;
+    for (int i = 0; i < local.length; i++) {
+      final p = local[i];
+      final w = weights[i];
+      final dx = p.x - meanX;
+      final dy = p.y - meanY;
+      sxx += w * dx * dx;
+      syy += w * dy * dy;
+      sxy += w * dx * dy;
+    }
+    if (!sxx.isFinite || !syy.isFinite || !sxy.isFinite) {
+      return {
+        'angle': 90.0,
+        'r_squared': 0.0,
+        'used_points': local.length.toDouble(),
+        'slope': double.nan,
+      };
+    }
+
+    final trace = sxx + syy;
+    final det = sxx * syy - sxy * sxy;
+    final disc = ((trace * trace) * 0.25 - det).clamp(0.0, double.infinity);
+    final root = math.sqrt(disc);
+    final lambda = trace * 0.5 + root; // principal eigenvalue
+
+    double vx;
+    double vy;
+    if (sxy.abs() > 1e-12) {
+      vx = lambda - syy;
+      vy = sxy;
+    } else if (sxx >= syy) {
+      vx = 1.0;
+      vy = 0.0;
+    } else {
+      vx = 0.0;
+      vy = 1.0;
+    }
+
+    final norm = math.sqrt(vx * vx + vy * vy);
+    if (!norm.isFinite || norm <= 1e-12) {
+      return {
+        'angle': 90.0,
+        'r_squared': 0.0,
+        'used_points': local.length.toDouble(),
+        'slope': double.nan,
+      };
+    }
+    vx /= norm;
+    vy /= norm;
+
+    double slope;
+    if (vx.abs() < 1e-6) {
+      slope = vy >= 0 ? double.infinity : double.negativeInfinity;
+    } else {
+      slope = vy / vx;
+    }
+
+    final finalAngle =
+        _contactAngleFromTangentVector(vx, vy, isLeftSide).clamp(0.0, 180.0);
+
+    // Local linearity score using orthogonal residual energy.
+    double ssOrth = 0.0;
+    double ssTot = 0.0;
+    for (int i = 0; i < local.length; i++) {
+      final p = local[i];
+      final w = weights[i];
+      final dx = p.x - meanX;
+      final dy = p.y - meanY;
+      final orth = (vx * dy - vy * dx);
+      ssOrth += w * orth * orth;
+      ssTot += w * (dx * dx + dy * dy);
+    }
+    final rSquared =
+        (ssTot > 1e-10) ? (1.0 - (ssOrth / ssTot)).clamp(0.0, 1.0) : 0.0;
+
+    return {
+      'angle': finalAngle.toDouble(),
+      'r_squared': rSquared.toDouble(),
+      'used_points': local.length.toDouble(),
+      'slope': slope,
+    };
   }
 
   static Map<String, Object> _fitWeightedPolynomialNormalized(
@@ -586,6 +797,70 @@ class AngleUtils {
       xPow *= x;
     }
     return acc;
+  }
+
+  static double _contactAngleFromSlope(double dyDx, bool isLeftSide) {
+    if (!dyDx.isFinite) {
+      return 90.0;
+    }
+    return _contactAngleFromTangentVector(1.0, dyDx, isLeftSide);
+  }
+
+  static double _contactAngleFromTangentVector(
+    double tx,
+    double ty,
+    bool isLeftSide,
+  ) {
+    if (!tx.isFinite || !ty.isFinite) {
+      return 90.0;
+    }
+
+    double vx = tx;
+    double vy = ty;
+
+    // In the baseline-aligned frame the droplet lies above the substrate
+    // (negative y), so the physically relevant tangent ray must point upward.
+    if (vy > 0.0) {
+      vx = -vx;
+      vy = -vy;
+    }
+
+    final norm = math.sqrt(vx * vx + vy * vy);
+    if (!norm.isFinite || norm <= 1e-10) {
+      return 90.0;
+    }
+    vx /= norm;
+    vy /= norm;
+
+    final substrateX = isLeftSide ? 1.0 : -1.0;
+    final dot = (substrateX * vx).clamp(-1.0, 1.0);
+    return math.acos(dot) * 180.0 / math.pi;
+  }
+
+  static double _closestEllipseParameter(
+    double xr,
+    double yr,
+    double a,
+    double b,
+  ) {
+    double t = math.atan2(yr * a, xr * b);
+    for (int iter = 0; iter < 16; iter++) {
+      final sinT = math.sin(t);
+      final cosT = math.cos(t);
+      final f = (b * b - a * a) * sinT * cosT + a * xr * sinT - b * yr * cosT;
+      final fp = (b * b - a * a) * (cosT * cosT - sinT * sinT) +
+          a * xr * cosT +
+          b * yr * sinT;
+      if (!f.isFinite || !fp.isFinite || fp.abs() < 1e-10) {
+        break;
+      }
+      final step = (f / fp).clamp(-0.5, 0.5);
+      t -= step;
+      if (step.abs() < 1e-10) {
+        break;
+      }
+    }
+    return t;
   }
 
   /// Weighted least-squares polynomial fitting
@@ -720,6 +995,96 @@ class AngleUtils {
     }
 
     return v;
+  }
+
+  /// Select the Halir–Flusser ellipse eigenvector of the 3×3 matrix [m]:
+  /// among the (up to three) real eigenvectors, the ellipse solution is the one
+  /// satisfying the constraint 4·a₀·a₂ − a₁² > 0. Computes eigenvalues from the
+  /// characteristic cubic and each eigenvector as the null space of (M − λI).
+  static List<double> _selectEllipseEigenvector(List<List<double>> m) {
+    final eigvals = _eigenvalues3x3(m);
+    List<double>? best;
+    double bestConstraint = 0.0;
+    for (final lambda in eigvals) {
+      final v = _nullVector3x3(m, lambda);
+      if (v == null) continue;
+      final constraint = 4.0 * v[0] * v[2] - v[1] * v[1];
+      if (constraint > 0 && constraint > bestConstraint) {
+        bestConstraint = constraint;
+        best = v;
+      }
+    }
+    // Fallback (degenerate data): dominant eigenvector, as before.
+    return best ?? _powerIteration(m);
+  }
+
+  /// Real eigenvalues of a general 3×3 matrix via its characteristic cubic
+  /// det(M − λI) = 0  ⇒  λ³ − c₂λ² + c₁λ − c₀ = 0, solved in closed form.
+  static List<double> _eigenvalues3x3(List<List<double>> m) {
+    final a = m[0][0], b = m[0][1], c = m[0][2];
+    final d = m[1][0], e = m[1][1], f = m[1][2];
+    final g = m[2][0], h = m[2][1], i = m[2][2];
+    // Characteristic polynomial: λ³ − trace·λ² + c1·λ − det = 0.
+    final trace = a + e + i;
+    final c1 = (a * e - b * d) + (a * i - c * g) + (e * i - f * h);
+    final det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    // Monic form λ³ + a₂λ² + a₁λ + a₀ with a₂=−trace, a₁=c1, a₀=−det.
+    // Depress to t³ + p·t + q = 0 via λ = t − a₂/3 = t + trace/3.
+    final shift = trace / 3.0;
+    final p = c1 - trace * trace / 3.0;
+    final q =
+        -2.0 * trace * trace * trace / 27.0 + trace * c1 / 3.0 - det;
+    final roots = <double>[];
+    final disc = (q * q) / 4.0 + (p * p * p) / 27.0;
+    if (disc > 1e-12) {
+      // One real root (Cardano).
+      final sq = math.sqrt(disc);
+      roots.add(_cbrt(-q / 2.0 + sq) + _cbrt(-q / 2.0 - sq) + shift);
+    } else {
+      // Three real roots (trigonometric form).
+      final r = math.sqrt(-(p * p * p) / 27.0);
+      final phi =
+          r.abs() < 1e-18 ? 0.0 : math.acos((-q / 2.0 / r).clamp(-1.0, 1.0));
+      final mBase = 2.0 * math.sqrt(-p / 3.0);
+      for (int k = 0; k < 3; k++) {
+        roots.add(mBase * math.cos((phi + 2.0 * math.pi * k) / 3.0) + shift);
+      }
+    }
+    return roots;
+  }
+
+  static double _cbrt(double x) =>
+      x < 0 ? -math.pow(-x, 1.0 / 3.0).toDouble() : math.pow(x, 1.0 / 3.0)
+          .toDouble();
+
+  /// Unit null-space vector of (M − λI) for an eigenvalue [lambda], via the
+  /// largest-magnitude cross product of the rows of (M − λI).
+  static List<double>? _nullVector3x3(List<List<double>> m, double lambda) {
+    final a = [
+      [m[0][0] - lambda, m[0][1], m[0][2]],
+      [m[1][0], m[1][1] - lambda, m[1][2]],
+      [m[2][0], m[2][1], m[2][2] - lambda],
+    ];
+    List<double> cross(List<double> u, List<double> v) => [
+          u[1] * v[2] - u[2] * v[1],
+          u[2] * v[0] - u[0] * v[2],
+          u[0] * v[1] - u[1] * v[0],
+        ];
+    final candidates = [
+      cross(a[0], a[1]),
+      cross(a[0], a[2]),
+      cross(a[1], a[2]),
+    ];
+    List<double>? best;
+    double bestNorm = 0.0;
+    for (final v in candidates) {
+      final n = math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+      if (n > bestNorm) {
+        bestNorm = n;
+        best = [v[0] / n, v[1] / n, v[2] / n];
+      }
+    }
+    return bestNorm > 1e-9 ? best : null;
   }
 
   /// Solve linear system Ax = b via Gaussian elimination with partial pivoting

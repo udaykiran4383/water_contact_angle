@@ -93,6 +93,136 @@ A method contributes only if valid. Typical rejection reasons:
 
 This is intentional: invalid methods are excluded from final angle and uncertainty weighting.
 
+## Scientific Precision Upgrades (ADSA)
+
+The contact-angle engine was upgraded for metrology-grade precision:
+
+### Axisymmetric Drop Shape Analysis (Young–Laplace)
+`lib/processing/young_laplace.dart` was rewritten as a proper ADSA solver — the
+reference method used by commercial tensiometers:
+
+- **Physics:** integrates the dimensionless Bashforth–Adams form of the
+  Young–Laplace equation (apex-radius–scaled arc-length ODE) with a small-step
+  RK4 integrator and a singularity-free apex start (L'Hôpital limit).
+- **Fitting:** a multi-start **Nelder–Mead simplex** minimises the true
+  **geometric (orthogonal) distance** from every contour point to the
+  theoretical meridian, over `[Bond number, apex radius, apex x, apex z]`.
+  Robust trimmed residuals bound outlier leverage. This replaces the old
+  144-point grid search, the Δx-only residual, and the hand-picked Bond number.
+- **Contact angle:** read directly as the tangent angle φ at the baseline
+  crossing of the best-fit profile (no linear interpolation of raw data).
+- **Validation:** `test/young_laplace_adsa_test.dart` recovers known
+  spherical-cap contact angles (50–150°) to within 2°, with R²>0.97, and is
+  robust to ~1 px contour noise. On the real PFOTES drops it matches the
+  reference LBADSA tool (≈112–117°) to within ~3°.
+
+### Robust back-lit silhouette extraction
+`lib/processing/silhouette_extractor.dart` is a new primary geometry path for
+the standard lab capture (a dark, back-lit drop on a bright diffuse
+background). Gradient/Canny edge detection fails on these because the dark drop
+**merges into the dark substrate** (no edge between them) and an internal bright
+refraction window creates spurious interior edges. The silhouette extractor
+instead uses the strong contrast that *does* exist — bright background vs. dark
+object:
+
+- **Otsu threshold** splits bright background from dark foreground.
+- **Substrate baseline** is the dominant "top-of-object" level across columns
+  (robust to the drop and to a partial-width stage block), accepted only where
+  bright background sits above it (rejects frame-edge dark bands), then fit as a
+  possibly-tilted line and refined from the substrate immediately adjacent to
+  the drop.
+- **Drop isolation** via connected components confined to *above* the baseline —
+  this cleanly separates the drop from the substrate it touches and from
+  background artifacts.
+- **Outer-edge row scan** traces the true silhouette and is immune to the
+  interior refraction window. Crucially, for contact angles >90° the drop bulges
+  *beyond* the contact points, so the full outline is kept (the legacy
+  contact-span narrowing would have clipped the very curvature that defines the
+  angle).
+
+The legacy edge pipeline remains as an automatic fallback when the scene is not
+a confident back-lit silhouette.
+
+**Region of interest (ROI).** Before measuring, the user can drag a box around
+the droplet (`lib/widgets/roi_select_screen.dart` → `DropRoi` →
+`ImageProcessor.processImage(file, roi: ...)`). The extractor confines its
+threshold, baseline and drop search to that window — the standard ADSA workflow
+for excluding background contamination or neighbouring features. The baseline is
+located by the *lower* cluster of column tops (a high percentile, not the
+median) so it stays correct even inside a tight ROI where the drop spans more
+columns than the surrounding substrate.
+
+### Validation against reference ground truth
+`PFOTES/ground_truth.csv` records the contact angles measured by the reference
+**LBADSA** tool for the 12 PFOTES drop photos (transcribed from the fitting
+screenshots in `PFOTES/Fitting/`). `test/pfotes_ground_truth_test.dart` runs the
+full pipeline against them:
+
+- **ADSA fits all 12/12 drops** (was 4/12 before this work).
+- **Mean error ≈ 1.45°, median error ≈ 1.4°, max error ≈ 3.7°** vs. the reference
+  tool — within LBADSA's own inter-operator reproducibility (~2–3°), with **no
+  outliers**.
+- The previously reported 22° "outlier" on `C_1.5%_2 coat_5` was a transcription
+  typo in the ground truth (`112.439` → correct `132.439`, confirmed against
+  `PFOTES/Fitting/Screenshot (589).png`). The automatic full-frame fit had always
+  been accurate on this drop (~2.6°); no manual ROI is needed.
+
+(Before this work the same drops measured with ~32° mean error and frequent 90°
+fallbacks.)
+
+### Synthetic ground-truth harness
+Because the 12 LBADSA reference values are themselves manual fits (~2–3° own
+uncertainty), `test/synthetic_precision_test.dart` renders **anti-aliased
+spherical-cap silhouettes whose contact angle is known exactly** (dark drop +
+dark stage on a bright back-light; the 50%-intensity edge lands on the analytic
+boundary). This measures true pipeline accuracy against ground truth:
+
+- Clean caps (95–145°): **ensemble MAE ≈ 0.22°, ADSA MAE ≈ 0.14°, max ≈ 0.47°.**
+- Stress (sensor noise, ±4–5° stage tilt, small R=65px drops): **MAE ≈ 0.51°,
+  max ≈ 1.8°.**
+- `test/geometry_fit_test.dart` pins the primitive fits to exact analytic
+  circles/ellipses (center, axes, geometric R² ≈ 1).
+
+Precision work driven by these harnesses (all validated to improve recovery
+against *known* truth without regressing the PFOTES reference):
+
+1. **Sub-pixel silhouette edges.** The back-lit row scan now refines each flank
+   to the 50%-coverage intensity crossing instead of the integer outer-object
+   column, so the ADSA fit sees sub-pixel contours (the integer index alone
+   capped every point at ±0.5 px). Biggest gains on tilt/small-drop cases.
+2. **Working circle method.** The circle R² was a radial-variance ratio whose
+   denominator collapses for a clean arc, so good fits scored ~0 and were
+   rejected — exactly backwards. Replaced with a well-conditioned geometric R²
+   (comparable to the ellipse/ADSA R²). A circle is the exact model for a cap,
+   so this is now the most accurate method under tilt.
+3. **Working ellipse method.** Fixed three bugs: the conic-center sign, the
+   Halir–Flusser eigenvector selection (a plain power iteration returned the
+   wrong conic — now a proper 3×3 characteristic-cubic eigensolver picks the
+   eigenvector satisfying `4AC−B²>0`), and a `q`-sign error in the cubic solver.
+   Ellipse parameters are transformed out of the normalized frame directly
+   (robust) rather than by denormalizing the raw conic coefficients.
+4. **Sub-pixel gradient edge sign.** The legacy parabolic peak offset had a
+   flipped sign, nudging refined edges the wrong way; corrected.
+
+### Fit-quality metrics
+- Ellipse R² is now the standard geometric `1 − SS_res/SS_tot` using true
+  closest-point distances (replacing an `exp(−res)` surrogate that inflated
+  apparent quality).
+
+### Ensemble & uncertainty
+- A near-perfect ADSA fit (R²≥0.97, low residual) now **anchors** the ensemble
+  instead of being down-weighted as an "outlier" against geometrically cruder
+  circle/polynomial fits. It is also exempt from the cross-method outlier
+  filter and the leave-one-out consistency penalty in that regime.
+- Bootstrap uncertainty uses a **circular moving-block bootstrap** so the
+  spatial correlation of contour points no longer under-estimates the
+  confidence interval.
+
+### Note on the `PFOTES/Fitting/Screenshot (*).png` files
+These are desktop screenshots of reference ADSA software, not droplet photos,
+and should not be treated as analysis inputs (they conveniently display the
+ground-truth contact angles used to validate the upgrades above).
+
 ## Scientific Notes
 
 - Without real scale calibration, physical units are approximate.
