@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'image_processor.dart';
 
 import 'theme/app_theme.dart';
+import 'capture/drop_camera_screen.dart';
 import 'processing/silhouette_extractor.dart';
 import 'widgets/roi_select_screen.dart';
 import 'widgets/glass_card.dart';
@@ -68,37 +69,66 @@ class _HomePageState extends State<HomePage> {
         maxHeight: 2400,
         imageQuality: 100,
       );
-
       if (pickedFile != null) {
-        File imageFile = File(pickedFile.path);
-
-        // Let the user optionally box the drop (excludes background features).
-        if (!mounted) return;
-        final selection = await showRoiSelector(context, imageFile);
-        if (!selection.proceed) return; // user backed out
-        final DropRoi? roi = selection.roi;
-
-        setState(() {
-          _isProcessing = true;
-          _resultText = 'Processing image...';
-          _latestResult = null;
-          _image = null;
-          _annotatedImage = null;
-        });
-
-        var result = await ImageProcessor.processImage(imageFile, roi: roi);
-
-        if (!mounted) return;
-
-        setState(() {
-          _image = imageFile;
-          _resultText = result['text'];
-          _annotatedImage = result['annotated'];
-          _latestResult = result; // store numeric & metadata for CSV
-        });
+        await _processFile(File(pickedFile.path));
       }
     } catch (e) {
       debugPrint('Error picking image: $e');
+      if (!mounted) return;
+      setState(() {
+        _resultText = 'Error: $e\n\nPlease check permissions and try again.';
+      });
+    }
+  }
+
+  /// Capture from the in-app manual camera (back-lit optimised). Falls back to
+  /// the system camera if the custom camera is unavailable.
+  Future<void> _captureFromCamera() async {
+    File? file;
+    try {
+      if (!mounted) return;
+      file = await Navigator.of(context).push<File>(
+        MaterialPageRoute(builder: (_) => const DropCameraScreen()),
+      );
+    } catch (e) {
+      debugPrint('In-app camera failed, falling back to system camera: $e');
+    }
+    if (file != null) {
+      await _processFile(file);
+    } else {
+      // User cancelled or camera unavailable → offer the system camera.
+      await _pickImage(ImageSource.camera);
+    }
+  }
+
+  /// Shared analysis path for a captured/picked image file: optional ROI, then
+  /// the full processing pipeline.
+  Future<void> _processFile(File imageFile) async {
+    try {
+      // Let the user optionally box the drop (excludes background features).
+      if (!mounted) return;
+      final selection = await showRoiSelector(context, imageFile);
+      if (!selection.proceed) return; // user backed out
+      final DropRoi? roi = selection.roi;
+
+      setState(() {
+        _isProcessing = true;
+        _resultText = 'Processing image...';
+        _latestResult = null;
+        _image = null;
+        _annotatedImage = null;
+      });
+
+      var result = await ImageProcessor.processImage(imageFile, roi: roi);
+      if (!mounted) return;
+      setState(() {
+        _image = imageFile;
+        _resultText = result['text'];
+        _annotatedImage = result['annotated'];
+        _latestResult = result;
+      });
+    } catch (e) {
+      debugPrint('Error processing image: $e');
       if (!mounted) return;
       setState(() {
         _resultText = 'Error: $e\n\nPlease check permissions and try again.';
@@ -335,7 +365,7 @@ class _HomePageState extends State<HomePage> {
                       ),
                       const SizedBox(width: 16),
                       GradientButton(
-                        onPressed: _isProcessing ? null : () => _pickImage(ImageSource.camera),
+                        onPressed: _isProcessing ? null : _captureFromCamera,
                         icon: Icons.camera_alt,
                         label: 'Camera',
                         colors: const [Colors.deepPurpleAccent, Colors.purpleAccent],

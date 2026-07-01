@@ -4,12 +4,13 @@ publish_to: 'none'
 version: 1.0.0+1
 
 environment:
-  sdk: ">=2.19.0 <3.0.0"
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
     sdk: flutter
   image_picker: ^1.0.7
+  camera: ^0.11.0   # in-app manual camera for back-lit sessile-drop capture
   opencv_dart: ^1.4.3   # or omit version and use `flutter pub add opencv_dart`
   path_provider: ^2.0.15
   image: ^4.0.17

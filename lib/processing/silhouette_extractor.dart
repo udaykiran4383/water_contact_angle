@@ -118,49 +118,83 @@ class SilhouetteExtractor {
     for (int x = rx0; x < rx1; x++) {
       if (topObj[x].isFinite) validTops.add(topObj[x]);
     }
-    if (validTops.length < effW * 0.15) return null;
 
-    // Substrate level = the LOWER (larger-y) cluster of column tops. The drop
-    // apex sits higher (smaller y) than the substrate; using a high percentile
-    // (rather than the median) lands on the substrate even inside a tight ROI
-    // where the drop occupies more columns than the surrounding substrate.
-    final substrateLevel = _percentile(validTops, 0.70);
-    final near =
-        validTops.where((v) => (v - substrateLevel).abs() <= 20.0).toList();
-    final spread =
-        near.length > 3 ? _mad(near, substrateLevel) * 1.4826 : 4.0;
-    final tol = math.max(6.0, math.min(40.0, spread * 2.5 + 4.0));
+    double slope = 0.0;
+    double intercept = double.nan;
+    double tol = 10.0;
+    double spread = 4.0;
+    int baselineInliers = 0;
+    double reflectionScore = 0.0;
+    bool haveBaseline = false;
 
-    // Baseline inliers: columns whose top sits at the substrate level.
-    final bx = <double>[], by = <double>[];
-    for (int x = rx0; x < rx1; x++) {
-      if (topObj[x].isFinite && (topObj[x] - substrateLevel).abs() <= tol) {
-        bx.add(x.toDouble());
-        by.add(topObj[x]);
+    // --- 2a. Specular-stage baseline: drop/reflection mirror symmetry ----
+    // A mirror stage (silicon, glass, polished metal) has no dark substrate
+    // band, so the per-column "tops" of 2b would latch onto the drop's own
+    // upper edge and place a false baseline through the drop middle. The drop
+    // and its reflection instead form a dark blob symmetric about the surface
+    // plane, with a narrow "waist" at the contact line (for the θ>90° drops this
+    // instrument targets). We therefore test for that symmetry FIRST: the check
+    // is strict (needs two lobes + a waist), so it returns null on a matte dark
+    // stage (full-width dark below the drop breaks the symmetry) and on a lone
+    // drop (single lobe) — leaving those to the matte path untouched.
+    {
+      final sp = _specularBaseline(
+          gray, width, height, rx0, ry0, rx1, ry1, otsu, bg);
+      if (sp != null) {
+        slope = 0.0;
+        intercept = sp[0];
+        reflectionScore = sp[1];
+        tol = 12.0;
+        // Confidence proxy: a strong, well-formed symmetry stands in for the
+        // per-column substrate inliers the matte path would have counted.
+        baselineInliers = (effW * (0.10 + 0.25 * reflectionScore)).round();
+        haveBaseline = true;
       }
     }
-    if (bx.length < math.max(15, effW * 0.08)) return null;
 
-    // Robust line fit (one reweighting pass) -> baseline slope/intercept.
-    var line = _lineFit(bx, by);
-    for (int pass = 0; pass < 2; pass++) {
-      final ix = <double>[], iy = <double>[];
-      for (int i = 0; i < bx.length; i++) {
-        final pred = line[0] * bx[i] + line[1];
-        if ((by[i] - pred).abs() <= math.max(2.5, tol * 0.6)) {
-          ix.add(bx[i]);
-          iy.add(by[i]);
+    // --- 2b. Matte-stage baseline: cluster of per-column "tops" ----------
+    // A dark substrate band gives many columns whose first-dark row sits at the
+    // surface level; the drop apex sits higher, so a high percentile lands on
+    // the substrate.
+    if (!haveBaseline && validTops.length >= effW * 0.15) {
+      final substrateLevel = _percentile(validTops, 0.70);
+      final near =
+          validTops.where((v) => (v - substrateLevel).abs() <= 20.0).toList();
+      spread = near.length > 3 ? _mad(near, substrateLevel) * 1.4826 : 4.0;
+      tol = math.max(6.0, math.min(40.0, spread * 2.5 + 4.0));
+
+      final bx = <double>[], by = <double>[];
+      for (int x = rx0; x < rx1; x++) {
+        if (topObj[x].isFinite && (topObj[x] - substrateLevel).abs() <= tol) {
+          bx.add(x.toDouble());
+          by.add(topObj[x]);
         }
       }
-      if (ix.length >= 10) line = _lineFit(ix, iy);
+      if (bx.length >= math.max(15, effW * 0.08)) {
+        var line = _lineFit(bx, by);
+        for (int pass = 0; pass < 2; pass++) {
+          final ix = <double>[], iy = <double>[];
+          for (int i = 0; i < bx.length; i++) {
+            final pred = line[0] * bx[i] + line[1];
+            if ((by[i] - pred).abs() <= math.max(2.5, tol * 0.6)) {
+              ix.add(bx[i]);
+              iy.add(by[i]);
+            }
+          }
+          if (ix.length >= 10) line = _lineFit(ix, iy);
+        }
+        slope = line[0];
+        intercept = line[1];
+        if (slope.abs() > 0.45) {
+          slope = 0.0;
+          intercept = substrateLevel;
+        }
+        baselineInliers = bx.length;
+        haveBaseline = true;
+      }
     }
-    double slope = line[0];
-    double intercept = line[1];
-    // Guard against an over-tilted (non-physical) baseline.
-    if (slope.abs() > 0.45) {
-      slope = 0.0;
-      intercept = substrateLevel;
-    }
+
+    if (!haveBaseline || !intercept.isFinite) return null;
     double baseAt(double x) => slope * x + intercept;
 
     // --- 3. Connected-component drop selection (strictly ABOVE baseline) -
@@ -223,7 +257,10 @@ class SilhouetteExtractor {
         final central =
             1.0 - ((cxComp - winCx).abs() / (effW / 2.0)).clamp(0.0, 1.0);
         double score = area.toDouble() + 6.0 * support + 800.0 * central;
-        if (miny <= ry0 + 2) score -= 1e7; // dark band at the window top
+        // A dark band along the window top (vignette/fixture shadow) is WIDE and
+        // FLAT; penalise only that, not a tall drop whose dosing needle happens
+        // to reach the top edge (needle-in-drop is a valid, common capture).
+        if (miny <= ry0 + 2 && compW > 1.2 * compH) score -= 1e7;
         if (compW > effW * 0.8) score -= 1e7; // full-width band, not a drop
         if (compH < 12) score -= 1e6;
         if (score > bestScore) {
@@ -307,6 +344,39 @@ class SilhouetteExtractor {
     }
     if (leftEdge.length < 6) return null;
 
+    // Trim a dispensing needle-in-drop. A dosing needle enters the drop apex as
+    // a narrow, roughly-constant-width dark column; the connected component then
+    // includes it, so the traced apex is the needle top and the fits see a
+    // spurious spike. Detect a sustained narrow run at the top (median width of
+    // the upper rows << the drop's maximum width — a real drop apex is never
+    // that narrow relative to its widest point) and drop those rows down to the
+    // "shoulder" where the true drop widens. No-op for needle-free drops.
+    if (leftEdge.length >= 20) {
+      final widths = List<double>.generate(
+          leftEdge.length, (i) => rightEdge[i].x - leftEdge[i].x);
+      final maxW = widths.reduce(math.max);
+      final nTop = math.max(4, (widths.length * 0.15).round());
+      final topSorted = widths.sublist(0, nTop)..sort();
+      final medTop = topSorted[topSorted.length ~/ 2];
+      if (maxW > 1e-6 && medTop < 0.28 * maxW) {
+        int apexIdx = 0;
+        final shoulder = math.max(1.7 * medTop, 0.30 * maxW);
+        for (int i = 0; i < widths.length; i++) {
+          if (widths[i] > shoulder) {
+            apexIdx = i;
+            break;
+          }
+        }
+        // Require the narrow column to persist (a real apex widens within a few
+        // rows) and to leave enough drop below to fit.
+        if (apexIdx >= 6 && leftEdge.length - apexIdx >= 10) {
+          leftEdge.removeRange(0, apexIdx);
+          rightEdge.removeRange(0, apexIdx);
+          apexY = leftEdge.first.y;
+        }
+      }
+    }
+
     contour
       ..addAll(leftEdge)
       ..addAll(rightEdge);
@@ -316,7 +386,7 @@ class SilhouetteExtractor {
     final rightContactX = rightEdge.last.x;
 
     // --- 5. Confidence ---------------------------------------------------
-    final inlierFraction = bx.length / effW;
+    final inlierFraction = baselineInliers / effW;
     final contrastScore = ((contrast - 35) / 90).clamp(0.0, 1.0);
     final sizeScore = (dropWidth / (effW * 0.12)).clamp(0.0, 1.0);
     final coverage = (leftEdge.length / math.max(1.0, dropHeight)).clamp(0.0, 1.0);
@@ -336,6 +406,7 @@ class SilhouetteExtractor {
       'inlier_fraction': inlierFraction.clamp(0.0, 1.0),
       'tilt_penalty': (slope.abs() / 0.45).clamp(0.0, 1.0),
       'confidence': (0.45 + 0.55 * inlierFraction).clamp(0.0, 1.0),
+      'reflection_score': reflectionScore,
       'source': 'silhouette',
     };
 
@@ -353,6 +424,137 @@ class SilhouetteExtractor {
   }
 
   // --- helpers ----------------------------------------------------------
+
+  /// Locate the baseline on a SPECULAR stage (no dark substrate band) as the
+  /// axis of mirror symmetry of the drop+reflection silhouette.
+  ///
+  /// Returns `[baselineY, reflectionScore(0..1)]`, or null when the scene is not
+  /// a confident drop-plus-reflection. Method:
+  ///   1. `rowDark[y]` = number of dark (object) pixels in each row — the drop
+  ///      and its reflection are dark; the reflected back-light is bright.
+  ///   2. isolate the tallest contiguous dark blob (drop + reflection);
+  ///   3. find the row `y0` minimising the mirror mismatch
+  ///      Σ_d (rowDark[y0−d] − rowDark[y0+d])² — the symmetry axis;
+  ///   4. require a "waist": rowDark[y0] must be a clear local minimum flanked
+  ///      by wider lobes above (drop equator) and below (reflection equator).
+  ///      This confirms a θ>90° drop with a reflection and rejects a lone drop
+  ///      (single lobe) or arbitrary dark regions;
+  ///   5. refine `y0` to sub-pixel by parabolic interpolation of the cost.
+  static List<double>? _specularBaseline(List<int> gray, int width, int height,
+      int rx0, int ry0, int rx1, int ry1, int otsu, double bg) {
+    // Isolate ONLY the truly-dark drop/reflection, not the (mid-bright)
+    // reflected back-light which a global Otsu would sweep in as "object". Use
+    // a threshold a third of the way from the darkest level to the background.
+    double fg = 255.0;
+    for (int y = ry0; y < ry1; y += 2) {
+      final base = y * width;
+      for (int x = rx0; x < rx1; x += 2) {
+        final v = gray[base + x].toDouble();
+        if (v < fg) fg = v;
+      }
+    }
+    final thr = math.min(otsu.toDouble(), fg + 0.35 * (bg - fg));
+
+    final rowDark = List<double>.filled(height, 0.0);
+    final minCount = math.max(6, ((rx1 - rx0) * 0.02).round());
+    for (int y = ry0; y < ry1; y++) {
+      int c = 0;
+      final base = y * width;
+      for (int x = rx0; x < rx1; x++) {
+        if (gray[base + x] < thr) c++;
+      }
+      rowDark[y] = c.toDouble();
+    }
+
+    // Tallest run of "dark enough" rows = the drop+reflection blob. Tolerate a
+    // few bright rows (the thin meniscus/contact line separating drop from its
+    // reflection) so the run isn't split at the baseline itself.
+    const maxGap = 4;
+    int yTop = -1, yBot = -1, bestLen = 0, curStart = -1, curEnd = -1, gap = 0;
+    for (int y = ry0; y < ry1; y++) {
+      if (rowDark[y] >= minCount) {
+        if (curStart < 0) curStart = y;
+        curEnd = y;
+        gap = 0;
+        if (curEnd - curStart + 1 > bestLen) {
+          bestLen = curEnd - curStart + 1;
+          yTop = curStart;
+          yBot = curEnd;
+        }
+      } else if (curStart >= 0) {
+        if (++gap > maxGap) {
+          curStart = -1;
+          gap = 0;
+        }
+      }
+    }
+    if (yTop < 0 || bestLen < 24) return null;
+
+    final lo = yTop + (bestLen * 0.20).round();
+    final hi = yBot - (bestLen * 0.20).round();
+    if (hi <= lo) return null;
+    final maxD = (bestLen * 0.42).round();
+
+    double cost(double y0) {
+      double s = 0.0;
+      int cnt = 0;
+      for (int d = 1; d <= maxD; d++) {
+        final ya = y0 - d, yb = y0 + d;
+        if (ya < ry0 || yb >= ry1 - 1) break;
+        final wa = _interpRow(rowDark, ya);
+        final wb = _interpRow(rowDark, yb);
+        final e = wa - wb;
+        s += e * e;
+        cnt++;
+      }
+      return cnt >= 8 ? s / cnt : double.infinity;
+    }
+
+    double bestY = (yTop + yBot) / 2.0, bestCost = double.infinity;
+    for (int y0 = lo; y0 <= hi; y0++) {
+      final c = cost(y0.toDouble());
+      if (c < bestCost) {
+        bestCost = c;
+        bestY = y0.toDouble();
+      }
+    }
+    if (!bestCost.isFinite) return null;
+
+    // Waist test: the symmetry axis must be a narrow neck between two lobes.
+    double maxAbove = 0.0, maxBelow = 0.0;
+    for (int y = yTop; y < bestY; y++) {
+      if (rowDark[y] > maxAbove) maxAbove = rowDark[y];
+    }
+    for (int y = bestY.round() + 1; y <= yBot; y++) {
+      if (rowDark[y] > maxBelow) maxBelow = rowDark[y];
+    }
+    final waist = _interpRow(rowDark, bestY);
+    if (maxAbove < 8 || maxBelow < 8) return null;
+    if (waist > 0.82 * math.min(maxAbove, maxBelow)) return null;
+
+    // Sub-pixel refinement (parabolic on the mirror-mismatch cost).
+    final cM = cost(bestY - 1), cP = cost(bestY + 1);
+    final denom = cM + cP - 2 * bestCost;
+    if (denom.abs() > 1e-9) {
+      final off = 0.5 * (cM - cP) / denom;
+      if (off.abs() <= 1.0) bestY += off;
+    }
+
+    // Symmetry quality vs a deliberately mismatched axis.
+    final flat = cost(bestY + maxD * 0.5);
+    final score = flat > 1e-6 ? (1.0 - bestCost / flat).clamp(0.0, 1.0) : 0.0;
+    if (score < 0.25) return null;
+    return [bestY, score];
+  }
+
+  /// Linear interpolation of a per-row profile at fractional row [y].
+  static double _interpRow(List<double> rows, double y) {
+    if (y <= 0) return rows[0];
+    if (y >= rows.length - 1) return rows[rows.length - 1];
+    final y0 = y.floor();
+    final f = y - y0;
+    return rows[y0] * (1.0 - f) + rows[y0 + 1] * f;
+  }
 
   /// Refine an integer outer-object column [xInt] at row [y] to the sub-pixel
   /// position where the row intensity crosses the half-coverage level [t50].

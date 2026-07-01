@@ -52,3 +52,5 @@ pfotes_ground_truth_report.csv
 silhouette_adsa_report.csv
 comparison_report*.csv
 debug_output/
+datasets/
+pfotes_annotated/

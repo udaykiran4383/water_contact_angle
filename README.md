@@ -204,6 +204,25 @@ against *known* truth without regressing the PFOTES reference):
 4. **Sub-pixel gradient edge sign.** The legacy parabolic peak offset had a
    flipped sign, nudging refined edges the wrong way; corrected.
 
+### Reflective-substrate (specular stage) support
+Surface-science stages are often specular (silicon wafers, glass, polished
+metal), so a back-lit drop casts a mirror image below the surface. The true
+baseline is the **axis of mirror symmetry** of the drop+reflection silhouette,
+not the bottom of that blob — mis-reading it inflates the angle (the classic
+"is the shadow considered?" problem). `test/reflection_baseline_test.dart`
+renders drops on stages of varying reflectivity with an exactly-known baseline:
+
+- **Matte & moderate stages:** the substrate-top detector already places the
+  baseline at **0.0 px** error (< 0.3° angle error) — unchanged.
+- **Strong mirror stages:** the old code had no dark substrate to lock onto, so
+  it fell back to the legacy path (up to **1.6°** error). A new specular baseline
+  detector (`SilhouetteExtractor._specularBaseline`) finds the surface as the
+  sub-pixel symmetry axis of the drop+reflection blob — detected by its narrow
+  "waist" (contact line) flanked by the drop and reflection lobes. It runs only
+  when that strict two-lobe symmetry is present, so matte back-lit capture is
+  untouched. Result: strong-mirror baseline error **0.0 px**, angle error
+  **< 0.26°** (was up to 1.6°). A `reflection_score` is reported for QC.
+
 ### Fit-quality metrics
 - Ellipse R² is now the standard geometric `1 − SS_res/SS_tot` using true
   closest-point distances (replacing an `exp(−res)` surrogate that inflated
