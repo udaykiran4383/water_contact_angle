@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Automated Sessile-Drop Contact Angle Analyzer — BTP Presentation</title>
+<style>
+  @page { size: 1280px 720px; margin: 0; }
+  * { box-sizing: border-box; }
+  html,body { margin:0; padding:0; }
+  body {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color:#12212f;
+    --navy:#12212f; --teal:#0e7490; --blue:#2a78d6; --aqua:#1baf7a;
+    --ink2:#52514e; --line:#d8dee4; --bg:#ffffff; --panel:#f4f7f9;
+  }
+  .slide {
+    width:1280px; height:720px; page-break-after:always; overflow:hidden;
+    position:relative; background:var(--bg); padding:54px 64px 40px 64px;
+  }
+  .slide .footer {
+    position:absolute; bottom:16px; left:64px; right:64px;
+    display:flex; justify-content:space-between; font-size:13px; color:#8a94a0;
+    border-top:1px solid var(--line); padding-top:8px;
+  }
+  h1 { font-size:44px; margin:0 0 6px 0; color:var(--navy); letter-spacing:-0.5px; }
+  h2 { font-size:31px; margin:0 0 6px 0; color:var(--navy); letter-spacing:-0.3px; }
+  .kicker { font-size:15px; font-weight:700; letter-spacing:2px; color:var(--teal); text-transform:uppercase; margin-bottom:8px; }
+  .rule { width:64px; height:4px; background:var(--teal); border-radius:2px; margin:10px 0 20px 0; }
+  p, li { font-size:19px; line-height:1.42; }
+  li { margin-bottom:9px; }
+  ul { margin:6px 0 0 0; padding-left:24px; }
+  b { color:var(--navy); }
+  .cols { display:flex; gap:36px; }
+  .col { flex:1; min-width:0; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px 20px; }
+  .eq { font-family: Georgia, serif; font-style: italic; font-size:21px; text-align:center; margin:10px 0; color:var(--navy); }
+  .capt { font-size:13.5px; color:var(--ink2); font-style:italic; margin-top:6px; text-align:center; }
+  img.fig { border:1px solid var(--line); border-radius:6px; max-width:100%; }
+  table { border-collapse:collapse; font-size:16.5px; margin:8px auto; }
+  th,td { border:1px solid #c4ccd4; padding:5px 12px; text-align:center; }
+  th { background:#e8eef2; color:var(--navy); }
+  .stat { text-align:center; padding:14px 8px; }
+  .stat .v { font-size:44px; font-weight:700; color:var(--teal); }
+  .stat .l { font-size:15px; color:var(--ink2); margin-top:2px; }
+  .flow { display:flex; align-items:center; gap:8px; justify-content:center; margin:14px 0; }
+  .fbox { background:#e9f3f5; border:1.5px solid var(--teal); color:var(--navy); border-radius:8px;
+          padding:10px 12px; font-size:15.5px; font-weight:600; text-align:center; }
+  .farr { color:var(--teal); font-size:22px; font-weight:700; }
+  .num { position:absolute; top:20px; right:28px; font-size:14px; color:#9aa4ae; }
+  .small { font-size:15.5px; }
+  .tag { display:inline-block; background:#e9f3f5; color:var(--teal); border-radius:5px; padding:1px 9px; font-size:14.5px; font-weight:700; margin-right:6px; }
+  .refline { font-size:12.5px; color:#8a94a0; }
+</style>
+</head>
+<body>
+
+<!-- ============ 1. TITLE ============ -->
+<div class="slide" style="display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;">
+  <img src="assets/iitb_logo.png" style="width:110px;margin-bottom:22px;">
+  <div class="kicker">B.Tech Project (MM492) · Department of Metallurgical Engineering &amp; Materials Science</div>
+  <h1 style="font-size:52px;max-width:1050px;">Automated Sessile-Drop<br>Contact Angle Analyzer</h1>
+  <p style="font-size:23px;color:var(--ink2);margin-top:10px;">Scientific-precision contact-angle metrology on a smartphone —<br>designed, built, and quantitatively validated</p>
+  <div style="display:flex;gap:60px;margin-top:38px;align-items:center;">
+    <div><p style="margin:0;"><b>Yennampelly Uday Kiran</b><br><span style="color:var(--ink2);font-size:17px;">22B2509</span></p></div>
+    <div style="width:1px;height:48px;background:var(--line);"></div>
+    <div><p style="margin:0;"><b>Guide: Prof. Sudhanshu Mallick</b><br><span style="color:var(--ink2);font-size:17px;">IIT Bombay · July 2026</span></p></div>
+  </div>
+  <img src="assets/app_icon.png" style="width:84px;border-radius:18px;margin-top:36px;">
+</div>
+
+<!-- ============ 2. MOTIVATION ============ -->
+<div class="slide">
+  <div class="num">2</div>
+  <div class="kicker">Motivation</div>
+  <h2>Wettability is fundamental; measuring it is expensive</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <ul>
+        <li>The contact angle θ is the primary observable of <b>wetting</b> — coatings, surface treatments, adhesion, superhydrophobicity.</li>
+        <li>Commercial goniometers (Krüss, Biolin, ramé-hart, DataPhysics) reach <b>±0.1°</b> — at <b>≈ ₹15 lakh</b> per instrument.</li>
+        <li>Key insight: they achieve this with modest <b>1–5 MP cameras</b>. Their accuracy lives in <b>optics and software</b>, not the sensor.</li>
+        <li>A smartphone sensor exceeds those cameras — so a careful optical bench + rigorous on-device software should approach lab-grade results.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:0.8;">
+      <div class="panel" style="display:flex;justify-content:space-around;">
+        <div class="stat"><div class="v">₹18k</div><div class="l">fabricated instrument<br>(stage + backlight + mount)</div></div>
+        <div class="stat"><div class="v">&gt;95%</div><div class="l">cost reduction vs<br>commercial goniometer</div></div>
+      </div>
+      <div class="panel" style="margin-top:18px;">
+        <p class="small" style="margin:0;"><b>Goal:</b> laboratory-defensible <i>static</i> contact angles — with propagated uncertainty and quality flags, not just a number — fully on-device.</p>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span>Automated Sessile-Drop Contact Angle Analyzer</span><span>IIT Bombay · MEMS</span></div>
+</div>
+
+<!-- ============ 3. PHYSICS ============ -->
+<div class="slide">
+  <div class="num">3</div>
+  <div class="kicker">Background</div>
+  <h2>The physics of the measurement</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <p><b>Young's equation</b> — force balance at the three-phase line:</p>
+      <p class="eq">γ<sub>SV</sub> − γ<sub>SL</sub> = γ<sub>LV</sub> cos θ</p>
+      <p><b>Young–Laplace</b> (Bashforth–Adams form) — the equilibrium drop profile, arc length s scaled by apex radius b:</p>
+      <p class="eq">dφ/ds = 2 − βz − sin φ / x,&nbsp;&nbsp; β = Δρ g b²/γ</p>
+      <ul class="small" style="font-size:17px;">
+        <li>β → 0: drop is a <b>spherical cap</b>; gravity flattens larger drops.</li>
+        <li>Exact geometric bound: θ ≥ 2·atan(h/a) — used later as a physical gate on degenerate fits.</li>
+        <li>At small β the Young–Laplace fit is <b>unidentifiable</b> (angle valid, surface tension not) — flagged, not over-claimed.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:0.85;">
+      <img class="fig" src="assets/synthetic_clean_125.png" style="width:100%;">
+      <p class="capt">The measurement image: a back-lit drop silhouette on its substrate (synthetic 125° cap — angle known exactly, used for validation).</p>
+    </div>
+  </div>
+  <div class="footer"><span>Young 1805 · Bashforth &amp; Adams 1883 · Hoorfar &amp; Neumann 2006</span><span>3</span></div>
+</div>
+
+<!-- ============ 4. ERROR SOURCES ============ -->
+<div class="slide">
+  <div class="num">4</div>
+  <div class="kicker">Background</div>
+  <h2>Where the error actually comes from</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <p>Published error analysis of goniometry (Vuckovac <i>et&nbsp;al.</i>, <i>Soft Matter</i> 2019):</p>
+      <ul>
+        <li><b>±1 px of baseline error → ≈0.5–1° of angle error</b> below 150°, growing to ≈8° as θ→180°.</li>
+        <li>Error scales <b>inversely with drop size in pixels</b>.</li>
+        <li>Seven experts analysing the <i>same image</i> spread over ~10°.</li>
+      </ul>
+      <p style="margin-top:14px;"><b>Design rules adopted:</b></p>
+      <ul class="small" style="font-size:17.5px;">
+        <li>Determine the baseline <b>algorithmically, to sub-pixel</b> precision.</li>
+        <li>Fill the frame with the drop; warn when it is small.</li>
+        <li><b>Propagate baseline sensitivity</b> into every reported uncertainty.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:0.9;">
+      <div class="panel">
+        <p style="margin:0 0 8px 0;"><b>Error budget of optical goniometry</b></p>
+        <table style="font-size:15.5px;">
+          <tr><th>Source</th><th>Mechanism</th><th>Mitigation here</th></tr>
+          <tr><td>Baseline placement</td><td>dominant; dθ/dh = 1/(r sinθ)</td><td>4-detector hierarchy, §baseline</td></tr>
+          <tr><td>Stage / camera tilt</td><td>parallax, skewed baseline</td><td>live level badge; tilt fit</td></tr>
+          <tr><td>Highlight clipping</td><td>blooming eats the 50% edge</td><td>−1 EV bias + capture QC</td></tr>
+          <tr><td>Autofocus drift</td><td>magnification change</td><td>tap-to-lock focus</td></tr>
+          <tr><td>Edge quantisation</td><td>±0.5 px integer edges</td><td>sub-pixel 50% crossing</td></tr>
+          <tr><td>Model bias</td><td>circle ≠ flattened drop</td><td>ensemble + full ADSA</td></tr>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span>Vuckovac et al., Soft Matter 15, 7089 (2019) · ISO 19403-2</span><span>4</span></div>
+</div>
+
+<!-- ============ 5. SYSTEM OVERVIEW ============ -->
+<div class="slide">
+  <div class="num">5</div>
+  <div class="kicker">System</div>
+  <h2>System overview</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <p><b>Hardware</b> (fabricated, ≈ ₹18,000)</p>
+      <ul class="small" style="font-size:17.5px;">
+        <li>Uniform LED back-light → dark drop on bright field</li>
+        <li>X/Z scissor stage for sample positioning</li>
+        <li>Multi-axis smartphone mount, acrylic base</li>
+        <li>SolidWorks design → vendor fabrication</li>
+      </ul>
+      <p style="margin-top:12px;"><b>Software</b></p>
+      <ul class="small" style="font-size:17.5px;">
+        <li>Flutter/Dart app; analysis backend is <b>100% native Dart</b> — no OpenCV in the measurement path, identical on every device and on CI</li>
+        <li>2–5 s per full-resolution image on a mid-range phone</li>
+        <li>Annotated overlays, per-method breakdown, CSV export</li>
+      </ul>
+    </div>
+    <div class="col">
+      <p><b>Analysis pipeline</b></p>
+      <div class="flow" style="flex-direction:column;gap:6px;align-items:stretch;">
+        <div class="fbox">Metrology-aware capture&nbsp; (level · exposure · QC)</div>
+        <div class="farr" style="text-align:center;">↓</div>
+        <div class="fbox">Silhouette extraction with sub-pixel edges</div>
+        <div class="farr" style="text-align:center;">↓</div>
+        <div class="fbox">Baseline hierarchy&nbsp; (matte · specular · glossy · junction)</div>
+        <div class="farr" style="text-align:center;">↓</div>
+        <div class="fbox">Four fits: circle · ellipse · tangent · Young–Laplace (ADSA)</div>
+        <div class="farr" style="text-align:center;">↓</div>
+        <div class="fbox">Validity-gated ensemble → θ ± u&nbsp; + quality flags</div>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span>Hardware: with Dixit Nisarg &amp; Anandu K (Stage-I report)</span><span>5</span></div>
+</div>
+
+<!-- ============ HARDWARE ============ -->
+<div class="slide">
+  <div class="num">6</div>
+  <div class="kicker">System · Hardware</div>
+  <h2>The fabricated instrument</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col" style="flex:1.25;">
+      <div class="figrow" style="display:flex;gap:12px;align-items:center;">
+        <img class="fig" src="assets/hw_setup.png" style="width:57%;">
+        <img class="fig" src="assets/hw_stage.png" style="width:41%;">
+      </div>
+      <p class="capt">Left: complete integrated setup — LED back-light, sample stage, smartphone mount on an acrylic base.
+      Right: fabricated sample stage — scissor lift (Z) with micrometer translation stage (X).</p>
+    </div>
+    <div class="col" style="flex:0.75;">
+      <ul class="small" style="font-size:17.5px;">
+        <li><b>3-block architecture:</b> uniform LED back-light · adjustable sample holder · multi-axis camera mount.</li>
+        <li>Digitally prototyped as a <b>fully-constrained SolidWorks assembly</b>.</li>
+        <li><b>Design-for-fabrication pivot:</b> sourcing low-volume precision parts locally was prohibitive → custom parametric model, professional vendor fabrication.</li>
+        <li>Geometry produces the canonical measurement image: dark silhouette on a bright, even field.</li>
+        <li>Total cost <b>≈ ₹18,000</b> — &gt;95% below a commercial goniometer.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer"><span>Hardware design &amp; integration with Dixit Nisarg Avinashkumar and Anandu K Gangadhar</span><span>6</span></div>
+</div>
+
+<!-- ============ 6. CAPTURE ============ -->
+<div class="slide">
+  <div class="num">7</div>
+  <div class="kicker">Capture</div>
+  <h2>Metrology-aware capture: discipline before pixels</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <ul>
+        <li><b>Live attitude badge</b> from the accelerometer — <i>roll</i> (baseline leveling; green ≤0.5°) and <i>pitch</i> (optical axis; ISO 19403-2 recommends 0–4° downward so contact points and reflection are visible). Shutter ring turns green only in tolerance.</li>
+        <li><b>Tap-to-lock focus</b> — autofocus hunting changes magnification mid-session.</li>
+        <li><b>−1 EV exposure bias + lock</b> — bright field kept just below clipping; the sub-pixel edge survives.</li>
+        <li><b>Zoom from a distance</b> — poor-man's telecentricity; less perspective error than shooting close.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:0.85;">
+      <div class="panel">
+        <p style="margin:0 0 6px 0;"><b>Post-capture quality control (automatic)</b></p>
+        <ul class="small" style="font-size:17px;margin-bottom:4px;">
+          <li>Highlight clipping &gt; 2% saturated pixels → <b>blooming</b> → retake prompt</li>
+          <li>Silhouette contrast (p95 − p5) too low → retake prompt</li>
+        </ul>
+      </div>
+      <div class="panel" style="margin-top:16px;">
+        <p style="margin:0;" class="small"><b>Why it matters:</b> every item maps 1-to-1 onto an entry in the error budget of slide 4 — geometry and exposure faults are cheaper to prevent at capture than to correct in software.</p>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span>ISO 19403-2 capture recommendations</span><span>7</span></div>
+</div>
+
+<!-- ============ 7. SILHOUETTE ============ -->
+<div class="slide">
+  <div class="num">8</div>
+  <div class="kicker">Pipeline · 1</div>
+  <h2>Silhouette extraction with sub-pixel edges</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <p><b>Why not Canny/Sobel?</b> The dark drop merges into the dark substrate (no edge exists between them); the interior refraction window creates strong <i>false</i> edges.</p>
+      <p><b>Approach</b> — use the one reliable contrast (bright field vs dark object):</p>
+      <ul class="small" style="font-size:17.5px;">
+        <li>Otsu threshold → dark objects; connected component <b>above the baseline</b> isolates the drop.</li>
+        <li>Row-scan of <b>outermost</b> pixels → immune to interior artefacts; continues to the per-column baseline so stage tilt cannot amputate the downhill contact.</li>
+        <li>Needle-in-drop detected as a sustained narrow apex run and trimmed to the shoulder.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:0.95;">
+      <div class="panel">
+        <p style="margin:0 0 6px 0;"><b>Sub-pixel localisation</b></p>
+        <p class="small" style="margin:0;">For an anti-aliased edge, the true boundary lies exactly at the <b>50%-coverage intensity crossing</b> between local background and object levels. Every horizontal edge point <i>and every baseline point</i> is refined to this crossing — integer edges cap accuracy at ±0.5 px, worth ≈0.5° on small drops since dθ ≈ σ<sub>baseline</sub>/a.</p>
+      </div>
+      <div class="panel" style="margin-top:14px;">
+        <p style="margin:0;" class="small">All fits then operate in the <b>baseline-aligned frame</b> (true rotation), with left and right angles computed independently and tilt-corrected — the practice of every reference instrument.</p>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span>Pipeline: lib/processing/silhouette_extractor.dart</span><span>8</span></div>
+</div>
+
+<!-- ============ 8. BASELINE ============ -->
+<div class="slide">
+  <div class="num">9</div>
+  <div class="kicker">Pipeline · 2</div>
+  <h2>Baseline detection: a hierarchy matched to substrate physics</h2>
+  <div class="rule"></div>
+  <table style="font-size:16px;">
+    <tr><th>Detector</th><th>Substrate regime</th><th>Signal</th><th>Origin of the idea</th></tr>
+    <tr><td><b>Matte band clustering</b></td><td>dark matte stage (our rig)</td><td>per-column first-dark rows cluster at the surface; robust line fit + <b>flank-support</b> test</td><td>classical</td></tr>
+    <tr><td><b>Specular mirror symmetry</b></td><td>mirror stages (Si, metal)</td><td>drop + reflection form a blob symmetric about the surface; sub-pixel symmetry axis + waist test</td><td>DropSnake (Stalder 2006)</td></tr>
+    <tr><td><b>Glossy step detection</b></td><td>mid-gray glossy (Teflon), camera pitched down</td><td>bright→mid-gray plateau-midpoint crossing on <b>object-free flank columns</b>; first sustained step from top</td><td>this work</td></tr>
+    <tr><td><b>Junction corner refine</b></td><td>reflective — contact below the visible horizon</td><td>corner of each flank's outermost-x trace (V for θ&lt;90°, waist for θ&gt;90°); two-segment fits, sub-pixel intersection → baseline <b>and tilt</b></td><td>Krüss ADVANCE · Dropometer · DE10214439A1</td></tr>
+  </table>
+  <div class="cols" style="margin-top:10px;">
+    <div class="col"><p class="small" style="margin:0;"><b>Arbitration, validated on real failures:</b> a flank-supported matte line is only overridden by a <i>corner-confirmed</i> junction; an unconfirmed horizon loses to any matte line below it; weak fallbacks may never overrule a supported matte line (a circle is locally mirror-symmetric about its equator).</p></div>
+    <div class="col" style="flex:0.55;"><p class="small" style="margin:0;"><b>Auditability:</b> every result records <i>which detector fired</i> (<span class="tag">baseline_method</span>) and the fitted tilt.</p></div>
+  </div>
+  <div class="footer"><span>Baseline error dominates the goniometry budget — hence four detectors</span><span>9</span></div>
+</div>
+
+<!-- ============ 9. FITS ============ -->
+<div class="slide">
+  <div class="num">10</div>
+  <div class="kicker">Pipeline · 3</div>
+  <h2>Four independent angle-extraction methods</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <p><span class="tag">Circle</span> Algebraic LS + geometric R². Exact at β→0. Gate fixed so hydrophilic caps (centre <i>below</i> baseline — correct geometry) are accepted.</p>
+      <p><span class="tag">Ellipse</span> Halir–Flusser stable direct conic fit; correct eigenvector via full 3×3 characteristic cubic; analytic tangents at the baseline.</p>
+      <p><span class="tag">Tangent</span> Polynomial fit in a frame <b>rotated to the local tangent</b> (weighted PCA): the profile is single-valued at any θ — removes the −5° steep-flank fold bias of image-frame fitting at 145°.</p>
+    </div>
+    <div class="col">
+      <p><span class="tag">Young–Laplace (ADSA)</span> the physical reference method:</p>
+      <ul class="small" style="font-size:17px;">
+        <li>RK4 integration of Bashforth–Adams from the apex (local error ≈10⁻⁹)</li>
+        <li><b>Orthogonal</b> residuals; multi-start Nelder–Mead over Bond seeds; robust trimming</li>
+        <li><b>Contact-zone exclusion:</b> the optically distorted ≈2 px band above the contact is excluded; θ read by <b>extrapolating</b> the fitted profile to the baseline (ADSA-NA practice). A proportional band tested <i>worse</i> — decisions made by measurement.</li>
+        <li><b>Degeneracy gates:</b> reject θ &lt; 0.6 × 2 atan(h/a) (flat-solution artefact); flag β &lt; 0.05 as circle-degenerate.</li>
+      </ul>
+      <p class="small" style="margin-top:6px;">A near-perfect ADSA fit <b>anchors</b> the ensemble; otherwise methods are combined with quality weights, Tukey outlier moderation and leave-one-out consistency.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Hoorfar &amp; Neumann 2006 · Halir &amp; Flusser 1998 · Nelder &amp; Mead 1965</span><span>10</span></div>
+</div>
+
+<!-- ============ 10. UNCERTAINTY ============ -->
+<div class="slide">
+  <div class="num">11</div>
+  <div class="kicker">Pipeline · 4</div>
+  <h2>Every angle ships with an uncertainty and quality flags</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <p>Five terms, combined in quadrature:</p>
+      <table style="font-size:15.5px;margin-left:0;">
+        <tr><th>Term</th><th>Estimator</th></tr>
+        <tr><td>Contour sampling</td><td>moving-block bootstrap (blocks ≈ √n preserve edge-noise correlation)</td></tr>
+        <tr><td>Method disagreement</td><td>1.4826 × MAD of valid methods</td></tr>
+        <tr><td>Edge localisation</td><td>near-contact residual spread / radius</td></tr>
+        <tr><td>Contact confidence</td><td>calibrated penalty map</td></tr>
+        <tr><td><b>Baseline placement</b></td><td>σ<sub>baseline</sub> × dθ/dh (exact, below)</td></tr>
+      </table>
+      <p class="eq" style="text-align:left;">dθ/dh = 1/(r·sin θ) = 1/a &nbsp;→&nbsp; reproduces the published 0.5°/px plateau and the θ→180° blow-up</p>
+    </div>
+    <div class="col" style="flex:0.85;">
+      <div class="panel">
+        <p style="margin:0 0 6px 0;"><b>ISO-style quality flags on the result card</b></p>
+        <ul class="small" style="font-size:17px;">
+          <li>θ ≥ 150° — baseline sensitivity grows steeply</li>
+          <li>θ ≤ 20° — tangent placement ambiguous</li>
+          <li>stage tilt &gt; 2° — level the stage</li>
+          <li>|θ<sub>L</sub> − θ<sub>R</sub>| &gt; 4° — non-axisymmetric drop or baseline error</li>
+          <li>drop &lt; 100 px half-width — error ∝ 1/size</li>
+        </ul>
+      </div>
+      <p class="small" style="margin-top:12px;">The result card also reports <b>per-method angles, acceptance/rejection reasons, and the baseline detector used</b> — the measurement is auditable, not a black box.</p>
+    </div>
+  </div>
+  <div class="footer"><span>Uncertainty model follows Vuckovac 2019; flags follow ISO 19403-2 practice</span><span>11</span></div>
+</div>
+
+<!-- ============ 11. VALIDATION METHODOLOGY ============ -->
+<div class="slide">
+  <div class="num">12</div>
+  <div class="kicker">Validation</div>
+  <h2>Three independent validation tiers — locked as regression tests</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <div class="panel">
+        <p style="margin:0;"><b>Tier 1 — exact synthetic truth.</b> Laboratory references are themselves fits; only synthetics give exact θ. 8×8-supersampled caps, 60–145°, plus noise / tilt / blur / small-drop / shadow stress.</p>
+      </div>
+      <div class="panel" style="margin-top:12px;">
+        <p style="margin:0;"><b>Tier 2 — laboratory reference.</b> 12 PFOTES-coated drops vs LB-ADSA (ImageJ) fits performed in the lab.</p>
+      </div>
+      <div class="panel" style="margin-top:12px;">
+        <p style="margin:0;"><b>Tier 3 — external dataset.</b> Published DropletLab Teflon set: needles, glossy substrate, faint reflections — deliberately adversarial.</p>
+      </div>
+    </div>
+    <div class="col" style="flex:0.8;">
+      <p><b>Why this matters:</b></p>
+      <ul class="small" style="font-size:18px;">
+        <li>Every threshold is <b>locked into the automated test suite</b> — any change that degrades accuracy fails the build.</li>
+        <li>All improvements this term were made <b>without regressing</b> the primary rig: Tables on the next slides are bit-for-bit stable under the Tier-3 work.</li>
+        <li>Ground truth was <i>expanded</i> (16 transcribed reference labels) before tuning — statistics before optimisation.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer"><span>test/: synthetic_precision · pfotes_ground_truth · dropletlab_dataset (27 tests green)</span><span>12</span></div>
+</div>
+
+<!-- ============ 12. TIER 1 RESULTS ============ -->
+<div class="slide">
+  <div class="num">13</div>
+  <div class="kicker">Validation · Tier 1</div>
+  <h2>Synthetic truth: MAE 0.106° clean, 0.135° under stress</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col" style="flex:1.15;">
+      <!-- bar chart: |error| by true angle -->
+      <svg viewBox="0 0 560 300" style="width:100%;">
+        <text x="12" y="18" font-size="14" fill="#52514e">|ensemble error| (°) vs true angle — clean synthetics</text>
+        <!-- gridlines at 0.1 0.2 -->
+        <g stroke="#e3e8ec" stroke-width="1">
+          <line x1="50" y1="250" x2="540" y2="250"/>
+          <line x1="50" y1="170" x2="540" y2="170"/>
+          <line x1="50" y1="90" x2="540" y2="90"/>
+        </g>
+        <g font-size="12" fill="#8a94a0">
+          <text x="20" y="254">0.0</text><text x="20" y="174">0.1</text><text x="20" y="94">0.2</text>
+        </g>
+        <!-- bars: values 0.09 .07 .07 .14 .09 .09 .14 .08 .19 ; x centers spaced 54 from 78 -->
+        <g fill="#2a78d6">
+          <rect x="66"  y="178" width="24" height="72" rx="4"/>
+          <rect x="120" y="194" width="24" height="56" rx="4"/>
+          <rect x="174" y="194" width="24" height="56" rx="4"/>
+          <rect x="228" y="138" width="24" height="112" rx="4"/>
+          <rect x="282" y="178" width="24" height="72" rx="4"/>
+          <rect x="336" y="178" width="24" height="72" rx="4"/>
+          <rect x="390" y="138" width="24" height="112" rx="4"/>
+          <rect x="444" y="186" width="24" height="64" rx="4"/>
+          <rect x="498" y="98"  width="24" height="152" rx="4"/>
+        </g>
+        <g font-size="12" fill="#12212f" text-anchor="middle">
+          <text x="78"  y="172">0.09</text><text x="132" y="188">0.07</text><text x="186" y="188">0.07</text>
+          <text x="240" y="132">0.14</text><text x="294" y="172">0.09</text><text x="348" y="172">0.09</text>
+          <text x="402" y="132">0.14</text><text x="456" y="180">0.08</text><text x="510" y="92">0.19</text>
+        </g>
+        <g font-size="12.5" fill="#52514e" text-anchor="middle">
+          <text x="78" y="268">60°</text><text x="132" y="268">75°</text><text x="186" y="268">85°</text>
+          <text x="240" y="268">95°</text><text x="294" y="268">105°</text><text x="348" y="268">115°</text>
+          <text x="402" y="268">125°</text><text x="456" y="268">135°</text><text x="510" y="268">145°</text>
+        </g>
+        <line x1="50" y1="250" x2="540" y2="250" stroke="#9aa4ae" stroke-width="1.2"/>
+      </svg>
+    </div>
+    <div class="col" style="flex:0.9;">
+      <table style="font-size:15px;">
+        <tr><th>Stress case</th><th>θ true</th><th>|err|</th></tr>
+        <tr><td>Noise σ=8</td><td>125°</td><td>0.12°</td></tr>
+        <tr><td>Stage tilt +5°</td><td>120°</td><td>0.08°</td></tr>
+        <tr><td>Small drop R=65 px</td><td>140°</td><td>0.32°</td></tr>
+        <tr><td>Defocus blur r=3</td><td>140°</td><td>0.21°</td></tr>
+        <tr><td>Contact shadow</td><td>150°</td><td>0.31°</td></tr>
+        <tr><td>Contact shadow</td><td>135°</td><td>0.03°</td></tr>
+      </table>
+      <p class="small" style="margin-top:8px;">12 stress cases, MAE <b>0.135°</b>, max 0.32°. The +5° tilt case cost <b>1.76°</b> before the tilted-baseline contour completion — now 0.08°.</p>
+    </div>
+  </div>
+  <div class="footer"><span>ADSA alone: 0.083° MAE on clean synthetics</span><span>13</span></div>
+</div>
+
+<!-- ============ 13. TIER 2 RESULTS ============ -->
+<div class="slide">
+  <div class="num">14</div>
+  <div class="kicker">Validation · Tier 2</div>
+  <h2>Laboratory reference: 1.56° MAE against LB-ADSA</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col" style="flex:1.05;">
+      <!-- parity plot 110-136 deg; plot x:70..510, y:265..25 -->
+      <svg viewBox="0 0 560 320" style="width:100%;">
+        <text x="12" y="16" font-size="14" fill="#52514e">Parity: this work vs laboratory LB-ADSA (12 PFOTES drops)</text>
+        <g stroke="#e3e8ec" stroke-width="1">
+          <line x1="70" y1="265" x2="510" y2="265"/><line x1="70" y1="205" x2="510" y2="205"/>
+          <line x1="70" y1="145" x2="510" y2="145"/><line x1="70" y1="85" x2="510" y2="85"/><line x1="70" y1="25" x2="510" y2="25"/>
+        </g>
+        <!-- identity line y=x from (110,110) to (136,136): x=70+ (v-110)*16.923; y=265-(v-110)*9.231 -->
+        <line x1="70" y1="265" x2="510" y2="25" stroke="#9aa4ae" stroke-width="1.4" stroke-dasharray="6 4"/>
+        <text x="430" y="52" font-size="12.5" fill="#8a94a0">y = x</text>
+        <!-- points (ref,meas): computed -->
+        <g fill="#2a78d6" stroke="#ffffff" stroke-width="2">
+          <circle cx="105.0" cy="255.0" r="6"/><!--112.07,111.12-->
+          <circle cx="184.9" cy="200.4" r="6"/><!--116.79,117.00-->
+          <circle cx="232.5" cy="193.7" r="6"/><!--119.60,117.72-->
+          <circle cx="449.8" cy="67.9"  r="6"/><!--132.44,131.35-->
+          <circle cx="430.3" cy="79.5"  r="6"/><!--131.29,130.09-->
+          <circle cx="315.9" cy="153.9" r="6"/><!--124.53,122.03-->
+          <circle cx="435.9" cy="83.9"  r="6"/><!--131.62,129.62-->
+          <circle cx="392.6" cy="81.4"  r="6"/><!--129.06,129.89-->
+          <circle cx="146.8" cy="223.3" r="6"/><!--114.54,114.52-->
+          <circle cx="346.5" cy="145.2" r="6"/><!--126.34,122.98-->
+          <circle cx="470.8" cy="38.4"  r="6"/><!--133.68,134.55-->
+          <circle cx="454.4" cy="90.3"  r="6"/><!--132.71,128.93-->
+        </g>
+        <g font-size="12.5" fill="#52514e">
+          <text x="60" y="280" text-anchor="middle">110</text><text x="180" y="280" text-anchor="middle">117</text>
+          <text x="290" y="280" text-anchor="middle">123</text><text x="400" y="280" text-anchor="middle">130</text><text x="510" y="280" text-anchor="middle">136</text>
+          <text x="40" y="269">110</text><text x="40" y="149">123</text><text x="40" y="29">136</text>
+        </g>
+        <text x="290" y="304" font-size="13" fill="#52514e" text-anchor="middle">Reference LB-ADSA (°)</text>
+        <text x="16" y="150" font-size="13" fill="#52514e" transform="rotate(-90 16 150)" text-anchor="middle">This work (°)</text>
+        <line x1="70" y1="265" x2="510" y2="265" stroke="#9aa4ae" stroke-width="1.2"/>
+        <line x1="70" y1="265" x2="70" y2="25" stroke="#9aa4ae" stroke-width="1.2"/>
+      </svg>
+    </div>
+    <div class="col" style="flex:0.9;">
+      <img class="fig" src="assets/pfotes_annotated_example.png" style="width:100%;">
+      <p class="capt">Annotated output: contour (green), baseline (red), contacts (magenta), fitted models.</p>
+      <ul class="small" style="font-size:16.5px;">
+        <li>MAE <b>1.56°</b> (≈1.2% relative), max 3.78°; ADSA converged 12/12</li>
+        <li>Residuals are <b>zero-mean scatter</b> at the reference method's own operator variability — further tuning on 12 samples would over-fit</li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer"><span>Reference: LB-ADSA (ImageJ, Stalder 2010) fits on the same images</span><span>14</span></div>
+</div>
+
+<!-- ============ 14. TIER 3 RESULTS ============ -->
+<div class="slide">
+  <div class="num">15</div>
+  <div class="kicker">Validation · Tier 3</div>
+  <h2>Generalisation: 21.2° → 7.3° on an adversarial external dataset</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <p>DropletLab Teflon set: dispensing needles, mid-gray glossy substrate, downward camera (visible horizon = substrate's <b>far edge</b>, not the contact line), faint reflections, burned-in annotations. 16 transcribed reference angles.</p>
+      <!-- before/after bars -->
+      <svg viewBox="0 0 520 170" style="width:100%;margin-top:6px;">
+        <text x="6" y="16" font-size="14" fill="#52514e">Labelled MAE (°), before → after the baseline research</text>
+        <g font-size="14" fill="#12212f">
+          <text x="6" y="62">Before</text>
+          <text x="6" y="118">After</text>
+        </g>
+        <rect x="70" y="44" width="423" height="26" rx="4" fill="#2a78d6"/>
+        <rect x="70" y="100" width="147" height="26" rx="4" fill="#1baf7a"/>
+        <text x="500" y="62" font-size="15" font-weight="bold" fill="#12212f" text-anchor="end">21.2°</text>
+        <text x="225" y="118" font-size="15" font-weight="bold" fill="#12212f">7.3°</text>
+        <line x1="70" y1="140" x2="493" y2="140" stroke="#9aa4ae" stroke-width="1"/>
+      </svg>
+      <p class="small" style="margin-top:4px;">Fixes: glossy step detector · junction-corner refinement · component-selector correction · ADSA degeneracy gate — <b>zero change</b> to Tiers 1–2.</p>
+    </div>
+    <div class="col" style="flex:0.75;">
+      <table style="font-size:16px;">
+        <tr><th>Liquid</th><th>n</th><th>MAE</th><th>Max</th></tr>
+        <tr><td>DI water</td><td>7</td><td>7.4°</td><td>18.6°</td></tr>
+        <tr><td>Ethylene glycol</td><td>4</td><td><b>2.1°</b></td><td>5.6°</td></tr>
+        <tr><td>Glycerol</td><td>5</td><td>11.4°</td><td>20.7°</td></tr>
+        <tr><td><b>Overall</b></td><td><b>16</b></td><td><b>7.3°</b></td><td>—</td></tr>
+      </table>
+      <p class="small" style="margin-top:8px;">References are themselves polynomial fits on needle-distorted drops (their own L–R asymmetry up to 16°) — 7.3° bounds the <b>combined</b> disagreement of both methods.</p>
+    </div>
+  </div>
+  <div class="footer"><span>DropletLab dataset (CC-BY), dropletlab.com/dataset · best single image: 0.3°</span><span>15</span></div>
+</div>
+
+<!-- ============ PROBLEM SKETCH ============ -->
+<div class="slide">
+  <div class="num">16</div>
+  <div class="kicker">Case study · The problem</div>
+  <h2>A hazard we identified on our own rig: where is the baseline?</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col" style="flex:0.72;">
+      <img class="fig" src="assets/sketch_baseline_problem.jpg" style="width:100%;max-height:430px;object-fit:cover;">
+      <p class="capt">Our working sketch: Case A — shadow not considered, a “possible baseline” appears above the true one;
+      Case B — shadow considered, drop + shadow form wedges at the contacts.</p>
+    </div>
+    <div class="col">
+      <p><b>The mechanism.</b> Under the drop's overhang the back-light is blocked: the drop, its shadow and its
+      reflection merge into <i>one</i> dark region. Two candidate baselines appear — the true contact plane, and the
+      shadow/reflection boundary below it. At ≈0.5–1° per pixel (slide 4), picking the wrong one costs tens of degrees.</p>
+      <p style="margin-top:10px;"><b>Methods we applied to solve it:</b></p>
+      <ul class="small" style="font-size:17px;">
+        <li><b>Specular mirror-symmetry:</b> treat the reflection as <i>signal</i> — the baseline is the sub-pixel symmetry axis of the drop + reflection blob (waist test, θ&gt;90°).</li>
+        <li><b>Glossy step detection:</b> plateau-midpoint crossing on object-free flank columns finds the surface even when it is brighter than the threshold.</li>
+        <li><b>Junction-corner refinement:</b> the corner of each flank's outermost-edge trace (slope-sign flip) marks the contact on both sides → baseline <i>and</i> tilt.</li>
+        <li><b>Arbitration + proof:</b> strict precedence rules between detectors, then synthetic wedge images with exactly known θ locked in as regression tests.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer"><span>Same signal family as Krüss ADVANCE, the Dropometer and DropSnake — implemented and verified on-device</span><span>16</span></div>
+</div>
+
+<!-- ============ 15. CASE STUDY ============ -->
+<div class="slide">
+  <div class="num">17</div>
+  <div class="kicker">Case study · The solution</div>
+  <h2>The contact-shadow hazard — identified, solved, proven</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col" style="flex:1.25;">
+      <div class="figrow" style="display:flex;gap:10px;">
+        <img class="fig" src="assets/rig_shadow_input.jpg" style="width:49%;">
+        <img class="fig" src="assets/rig_shadow_result.png" style="width:49%;">
+      </div>
+      <p class="capt">Left: rig capture — a dark wedge forms under the drop's overhang between the contacts.
+      Right: pipeline result — baseline (red) on the substrate horizon, contacts (magenta) at the wedge apexes.</p>
+    </div>
+    <div class="col" style="flex:0.9;">
+      <ul class="small" style="font-size:17.5px;">
+        <li>Naive detectors place the baseline at the <b>shadow bottom</b> → inflated contact width, corrupted θ.</li>
+        <li>This pipeline: θ = <b>134.95°</b>, left–right agreement <b>0.01°</b>; circle 135.6° / ADSA 135.9° / ellipse 132.4° — and self-consistent with a/R = sin θ.</li>
+        <li><b>Proof, not anecdote:</b> synthetic wedge + penumbra cases recover 150° to <b>0.31°</b> and 135° to <b>0.03°</b> — locked as regression tests.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="footer"><span>Synthetic model: mid-gray substrate, blocked-light wedge between contacts, outward penumbra</span><span>17</span></div>
+</div>
+
+<!-- ============ 16. LIMITATIONS ============ -->
+<div class="slide">
+  <div class="num">18</div>
+  <div class="kicker">Honest boundaries</div>
+  <h2>Known limitations — characterised, not hidden</h2>
+  <div class="rule"></div>
+  <div class="cols">
+    <div class="col">
+      <ul>
+        <li><b>Shadow-skirt regime</b> (external glycerol images): a soft halo widens <i>monotonically</i> into the substrate edge — no wedge apex, waist or corner exists for any trace-geometry detector. Costs 12–20° there. Fix path known: mirrored-model image-energy fit (Stalder) or learned segmentation.</li>
+        <li><b>Small drops:</b> error ∝ 1/pixel-size — flagged below 100 px half-width; the remedy is optical (zoom / move closer).</li>
+        <li><b>θ → 180°:</b> baseline sensitivity 1/(r sinθ) diverges; results ≥150° carry a warning, consistent with published advice to prefer force-based methods there.</li>
+      </ul>
+    </div>
+    <div class="col" style="flex:0.8;">
+      <div class="panel">
+        <p style="margin:0 0 6px 0;"><b>Future work</b></p>
+        <ul class="small" style="font-size:17px;">
+          <li>Mirrored-model baseline for the skirt regime</li>
+          <li>Needle-side independent fitting (Albert 2019, ≤0.6°)</li>
+          <li>Video capture: per-frame angles over a stability plateau (mean ± SD)</li>
+          <li>In-frame scale calibration → volume, physical Bond number, surface tension in the identifiable regime</li>
+          <li>Small on-device segmentation model as a fallback for messy field images</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <div class="footer"><span>Each limitation is measured on named images and documented with its literature fix path</span><span>18</span></div>
+</div>
+
+<!-- ============ 17. CONCLUSIONS ============ -->
+<div class="slide">
+  <div class="num">19</div>
+  <div class="kicker">Conclusions</div>
+  <h2>A validated instrument, not just an app</h2>
+  <div class="rule"></div>
+  <div style="display:flex;gap:20px;margin:8px 0 18px 0;">
+    <div class="panel stat" style="flex:1;"><div class="v">0.106°</div><div class="l">MAE vs exact synthetic truth (60–145°); 0.135° under stress</div></div>
+    <div class="panel stat" style="flex:1;"><div class="v">1.56°</div><div class="l">MAE vs laboratory LB-ADSA — at the reference's own scatter</div></div>
+    <div class="panel stat" style="flex:1;"><div class="v">7.3°</div><div class="l">on an adversarial external dataset (from 21.2°), zero rig regression</div></div>
+    <div class="panel stat" style="flex:1;"><div class="v">₹18k</div><div class="l">instrument cost — &gt;95% below commercial</div></div>
+  </div>
+  <ul>
+    <li>Reference physics on-device: full Bashforth–Adams ADSA with orthogonal residuals, exclusion zone, degeneracy gates.</li>
+    <li>Baseline detection matched to substrate physics — matte, specular, glossy, reflective — with auditable arbitration.</li>
+    <li>Metrologically honest output: propagated uncertainty (baseline term dominant, as the literature requires) + ISO-style flags.</li>
+    <li>Every accuracy claim is <b>reproducible and regression-guarded</b> in an automated test suite (27 tests).</li>
+  </ul>
+  <div class="footer"><span>Automated Sessile-Drop Contact Angle Analyzer — Y. Uday Kiran, IIT Bombay</span><span>19</span></div>
+</div>
+
+<!-- ============ 18. THANK YOU ============ -->
+<div class="slide" style="display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;">
+  <img src="assets/app_icon.png" style="width:96px;border-radius:20px;margin-bottom:20px;">
+  <h1 style="font-size:46px;">Thank you</h1>
+  <p style="font-size:21px;color:var(--ink2);max-width:900px;">Questions welcome — every number in this talk is reproducible from the project's automated validation suite.</p>
+  <div style="margin-top:26px;max-width:1080px;">
+    <p class="refline">Key references: Young, Phil. Trans. R. Soc. 95 (1805) · Bashforth &amp; Adams (1883) · Rotenberg, Boruvka &amp; Neumann, JCIS 93 (1983) · Hoorfar &amp; Neumann, Adv. Colloid Interface Sci. 121 (2006) · Stalder et al., Colloids Surf. A 286 (2006) &amp; 364 (2010) · Yang, Yu &amp; Zuo, Langmuir 33 (2017) · Vuckovac et al., Soft Matter 15 (2019) · Huhtamäki et al., Nat. Protoc. 13 (2018) · Nurmi et al., Soft Matter 21 (2025) · Chen, Muros-Cobos &amp; Amirfazli, Rev. Sci. Instrum. 89 (2018) · Albert et al., ACS Omega 4 (2019) · ISO 19403-2:2024 · Otsu, IEEE TSMC 9 (1979) · Halíř &amp; Flusser, WSCG (1998) · Nelder &amp; Mead, Comput. J. 7 (1965) · Berry et al., JCIS 454 (2015) · DropletLab dataset (CC-BY)</p>
+  </div>
+  <p style="margin-top:24px;font-size:16px;color:var(--ink2);"><b>Yennampelly Uday Kiran</b> · 22B2509 · Guide: Prof. Sudhanshu Mallick · Dept. of MEMS, IIT Bombay</p>
+</div>
+
+</body>
+</html>

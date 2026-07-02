@@ -1,0 +1,70 @@
+Resolving dependencies...
+Downloading packages...
+  archive 4.0.7 (4.0.9 available)
+  async 2.13.0 (2.13.1 available)
+  camera 0.11.4 (0.12.0+1 available)
+  camera_android_camerax 0.6.30 (0.7.3 available)
+  camera_avfoundation 0.9.23+2 (0.10.1 available)
+  cross_file 0.3.4+2 (0.3.5+4 available)
+  crypto 3.0.6 (3.0.7 available)
+  dartcv4 1.1.6 (2.2.1+4 available)
+  ffi 2.1.4 (2.2.0 available)
+  file_selector_linux 0.9.3+2 (0.9.4 available)
+  file_selector_macos 0.9.4+4 (0.9.5 available)
+  file_selector_platform_interface 2.6.2 (2.7.0 available)
+  file_selector_windows 0.9.3+4 (0.9.3+5 available)
+  flutter_lints 3.0.2 (6.0.0 available)
+  flutter_plugin_android_lifecycle 2.0.30 (2.0.35 available)
+  http 1.5.0 (1.6.0 available)
+  image 4.5.4 (4.9.1 available)
+  image_gallery_saver_plus 4.0.1 (5.0.0 available)
+  image_picker 1.2.0 (1.2.3 available)
+  image_picker_android 0.8.13+1 (0.8.13+19 available)
+  image_picker_for_web 3.1.0 (3.1.1 available)
+  image_picker_ios 0.8.13 (0.8.13+6 available)
+  image_picker_macos 0.2.2 (0.2.2+1 available)
+  image_picker_platform_interface 2.11.0 (2.11.1 available)
+  lints 3.0.0 (6.1.0 available)
+  matcher 0.12.19 (0.12.20 available)
+  meta 1.17.0 (1.18.3 available)
+  opencv_dart 1.4.3 (2.2.1+4 available)
+  path_provider 2.1.5 (2.1.6 available)
+  path_provider_android 2.2.18 (2.3.1 available)
+  path_provider_foundation 2.4.2 (2.6.0 available)
+  path_provider_linux 2.2.1 (2.2.2 available)
+  path_provider_platform_interface 2.1.2 (2.1.3 available)
+  petitparser 7.0.1 (7.0.2 available)
+  posix 6.0.3 (6.5.0 available)
+  source_span 1.10.1 (1.10.2 available)
+  test_api 0.7.10 (0.7.13 available)
+  vector_math 2.2.0 (2.4.0 available)
+  vm_service 15.0.0 (15.2.0 available)
+  xml 6.6.1 (7.0.1 available)
+Got dependencies!
+40 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+theta_true,ensemble,err,yl,circle,poly,ellipse
+60.0,59.91,0.09,59.96,59.98,59.49,59.81
+75.0,74.93,0.07,74.93,75.00,74.76,75.00
+85.0,84.93,0.07,84.95,85.00,84.59,85.01
+95.0,94.86,0.14,94.89,94.98,94.38,94.94
+105.0,104.91,0.09,104.93,104.98,104.63,104.92
+115.0,114.91,0.09,114.95,114.99,114.48,114.89
+125.0,124.86,0.14,124.89,124.99,124.40,124.82
+135.0,134.92,0.08,134.90,135.01,134.92,134.76
+145.0,144.81,0.19,144.85,145.00,144.52,144.43
+# ensemble_MAE=0.106, maxErr=0.190, yl_MAE=0.083, n=9/9
+case,theta_true,ensemble,err,yl,circle,poly,ellipse
+noise4_115,115.0,114.93,0.07,114.96,115.00,114.45,114.96
+noise4_135,135.0,134.86,0.14,134.88,135.00,134.49,134.80
+noise8_125,125.0,124.88,0.12,124.91,125.00,124.42,124.82
+tilt5_120,120.0,119.92,0.08,119.97,120.02,119.34,119.90
+tilt-4_130,130.0,129.91,0.09,129.95,130.01,129.48,129.82
+small_R_115,115.0,114.97,0.03,114.95,115.05,114.80,114.78
+small_R_140,140.0,139.68,0.32,139.71,140.03,139.86,138.60
+blur2_125,125.0,124.90,0.10,124.97,125.00,124.21,124.93
+blur3_140,140.0,139.79,0.21,139.93,139.99,138.57,139.55
+blur2_75,75.0,74.90,0.10,74.94,74.99,74.45,75.00
+shadow_150,150.0,149.69,0.31,149.81,150.03,148.24,149.34
+shadow_135,135.0,134.97,0.03,134.98,135.09,134.57,134.96
+# stress_MAE=0.135, maxErr=0.320, n=12/12
