@@ -15,6 +15,7 @@ dependencies:
   path_provider: ^2.0.15
   image: ^4.0.17
   image_gallery_saver_plus: ^4.0.1
+  sensors_plus: ^7.1.0
 
 
 dev_dependencies:

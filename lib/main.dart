@@ -316,17 +316,27 @@ class _HomePageState extends State<HomePage> {
                     padding: const EdgeInsets.all(20),
                     child: Column(
                       children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: AppTheme.tealAccent.withValues(alpha: 0.15),
-                            shape: BoxShape.circle,
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(18),
+                          child: Image.asset(
+                            'assets/app_icon.png',
+                            width: 72,
+                            height: 72,
+                            errorBuilder: (_, __, ___) => Container(
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color:
+                                    AppTheme.tealAccent.withValues(alpha: 0.15),
+                                shape: BoxShape.circle,
+                              ),
+                              child: const Icon(Icons.water_drop,
+                                  size: 48, color: AppTheme.tealAccent),
+                            ),
                           ),
-                          child: const Icon(Icons.water_drop, size: 48, color: AppTheme.tealAccent),
                         ),
-                        const SizedBox(height: 16),
+                        const SizedBox(height: 14),
                         const Text(
-                          'Sessile Drop Analysis',
+                          'Sessile Drop Goniometer',
                           style: TextStyle(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
@@ -336,12 +346,48 @@ class _HomePageState extends State<HomePage> {
                         ),
                         const SizedBox(height: 4),
                         const Text(
-                          'Automated scientific measurement',
+                          'Contact-angle metrology on a phone',
                           style: TextStyle(
                             fontSize: 14,
                             color: AppTheme.textSecondary,
                           ),
                           textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Opacity(
+                              opacity: 0.9,
+                              child: Image.asset('assets/iitb_logo.png',
+                                  height: 30,
+                                  errorBuilder: (_, __, ___) =>
+                                      const SizedBox.shrink()),
+                            ),
+                            const SizedBox(width: 12),
+                            Container(
+                              width: 1,
+                              height: 22,
+                              color: Colors.white.withValues(alpha: 0.2),
+                            ),
+                            const SizedBox(width: 12),
+                            Opacity(
+                              opacity: 0.9,
+                              child: Image.asset('assets/mems_logo.png',
+                                  height: 30,
+                                  errorBuilder: (_, __, ___) =>
+                                      const SizedBox.shrink()),
+                            ),
+                            const SizedBox(width: 12),
+                            const Text(
+                              'IIT Bombay · MEMS',
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: AppTheme.textSecondary,
+                                letterSpacing: 0.3,
+                              ),
+                            ),
+                          ],
                         ),
                         if (_image != null) ...[
                           const SizedBox(height: 12),
@@ -486,10 +532,11 @@ class _HomePageState extends State<HomePage> {
                           ),
                           const SizedBox(height: 12),
                           const Text(
-                            '• Use backlit droplet images (silhouette against bright background)\n'
-                            '• Ensure droplet is centered and touches clear surface\n'
-                            '• Avoid glare and reflections on droplet surface\n'
-                            '• Higher resolution images improve accuracy',
+                            '• Back-lit silhouette: dark drop on a bright, even LED field\n'
+                            '• Use the in-app camera: level to 0°, pitch 0–4° down, lock focus\n'
+                            '• Expose ≈ −1 EV so the back-light never clips (no blooming)\n'
+                            '• Zoom from a distance rather than moving closer (less parallax)\n'
+                            '• Fill the frame with the drop — precision scales with pixels',
                             style: TextStyle(
                               fontSize: 12,
                               color: AppTheme.textSecondary,

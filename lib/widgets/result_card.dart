@@ -307,6 +307,10 @@ class ResultCard extends StatelessWidget {
           _sectionLabel('Scientific Notation'),
           const SizedBox(height: 8),
           _infoRow('Angle', '${_fmtSci(angle)}°'),
+          _infoRow(
+              'Baseline',
+              '${results['baseline_method'] ?? results['baseline_source'] ?? '—'}'
+                  ', tilt ${_fmtNum(baselineTilt)}°'),
           if (bondPhysical.isFinite)
             _infoRow('Bo',
                 '${_fmtSci(bondPhysical)} | R: ${_fmtNum(dropRadiusMm, decimals: 4)} mm'),
