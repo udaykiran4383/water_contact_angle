@@ -176,6 +176,8 @@ void main() {
       'blur2_125': _renderCap(125, blurRadius: 2),
       'blur3_140': _renderCap(140, blurRadius: 3),
       'blur2_75': _renderCap(75, blurRadius: 2),
+      'shadow_150': _renderCapShadow(150),
+      'shadow_135': _renderCapShadow(135, rPix: 130),
     };
     final truth = <String, double>{
       'noise4_115': 115,
@@ -188,6 +190,8 @@ void main() {
       'blur2_125': 125,
       'blur3_140': 140,
       'blur2_75': 75,
+      'shadow_150': 150,
+      'shadow_135': 135,
     };
     final rows = <String>['case,theta_true,ensemble,err,yl,circle,poly,ellipse'];
     double sumErr = 0, maxErr = 0;
@@ -222,6 +226,54 @@ void main() {
     expect(maxErr, lessThanOrEqualTo(0.7),
         reason: 'stress max error regressed: $maxErr');
   });
+}
+
+/// Render a cap with a CONTACT-SHADOW WEDGE (the "Case A/B" baseline hazard):
+/// a mid-gray substrate whose surface darkens under and around the drop — the
+/// back-light blocked by the drop casts a dark wedge between the contact
+/// points and a penumbra spreading outward. A naive baseline detector reads
+/// the shadow bottom instead of the true contact plane; the correct result
+/// keeps the baseline at the substrate top with contacts at the wedge apexes.
+img.Image _renderCapShadow(double thetaDeg, {double rPix = 110}) {
+  final theta = thetaDeg * math.pi / 180.0;
+  final h = -rPix * math.cos(theta);
+  final centerYImg = _kBaselineY - h;
+  final a = rPix * math.sin(theta); // contact half-width
+  const int substrate = 150; // mid-gray stage, NOT black
+  final out = img.Image(width: _kW, height: _kH);
+  final inv = 1.0 / (_kSS * _kSS);
+  for (int yy = 0; yy < _kH; yy++) {
+    for (int xx = 0; xx < _kW; xx++) {
+      double acc = 0;
+      for (int sy = 0; sy < _kSS; sy++) {
+        final py = yy + (sy + 0.5) / _kSS;
+        for (int sx = 0; sx < _kSS; sx++) {
+          final px = xx + (sx + 0.5) / _kSS;
+          final dx = px - _kCx, dy = py - centerYImg;
+          final inDrop =
+              dx * dx + dy * dy <= rPix * rPix && py < _kBaselineY;
+          if (inDrop) {
+            acc += _kFg;
+          } else if (py >= _kBaselineY) {
+            // Substrate with blocked-light shadow: strongest directly under
+            // the drop (the wedge between the contacts), penumbra fading
+            // outward past the contacts and with depth.
+            final u = (px - _kCx).abs() / (1.25 * a);
+            final depth = (py - _kBaselineY) / 70.0;
+            final strength = 0.62 *
+                math.exp(-u * u * u * u) *
+                math.exp(-depth.clamp(0.0, 10.0));
+            acc += substrate * (1.0 - strength);
+          } else {
+            acc += _kBg;
+          }
+        }
+      }
+      final g = (acc * inv).round().clamp(0, 255);
+      out.setPixelRgb(xx, yy, g, g, g);
+    }
+  }
+  return out;
 }
 
 /// Render a smaller cap (radius [rPix]) to expose edge-quantization error, which
