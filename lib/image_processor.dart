@@ -125,7 +125,12 @@ Map<String, dynamic> _validateMethodResult(
         } else if (!radius.isFinite || radius <= 2.0) {
           reason = 'invalid_radius';
         } else if (!cy.isFinite ||
-            cy >= baselineY + math.max(0.6, radius * 0.04)) {
+            // For θ<90° (hydrophilic cap) the circle CENTER correctly lies
+            // below the baseline — what must hold for any sessile cap is that
+            // the circle's TOP rises meaningfully above it. (The old
+            // center-above-baseline gate silently rejected every hydrophilic
+            // drop.)
+            cy - radius >= baselineY - 4.0) {
           reason = 'center_below_baseline';
         } else if (leftX.isFinite && rightX.isFinite) {
           final radicand =
@@ -272,7 +277,7 @@ String _humanizeInvalidReason(String? reason) {
     case 'invalid_radius':
       return 'invalid radius';
     case 'center_below_baseline':
-      return 'circle center below baseline';
+      return 'circle cap below baseline';
     case 'contact_mismatch':
       return 'circle/contact mismatch';
     case 'invalid_axes':
@@ -1704,6 +1709,11 @@ class ImageProcessor {
           inverted: inverted, roi: roi);
       final bool useSilhouette =
           silhouette != null && silhouette.confidence >= 0.55;
+      if (silhouette == null &&
+          SilhouetteExtractor.lastRejectReason.isNotEmpty) {
+        _log('🪟 Silhouette extractor rejected: '
+            '${SilhouetteExtractor.lastRejectReason}');
+      }
       if (useSilhouette) {
         _log('🪟 Silhouette extractor: ${silhouette.contour.length} points, '
             'conf=${silhouette.confidence.toStringAsFixed(2)}, '
@@ -2923,6 +2933,19 @@ class ImageProcessor {
 
       // ============ UNCERTAINTY QUANTIFICATION ============
 
+      // σ of the baseline placement (px): standard error of the fitted line
+      // (rms/√n_inliers), floored at a sub-pixel systematic residual — even a
+      // perfect fit cannot beat the optical blur of the contact line.
+      final double baselineSigmaPx = (() {
+        final rms = ((baselineResult['rms'] as num?)?.toDouble() ?? 2.0)
+            .clamp(0.0, 10.0);
+        final inlierFrac =
+            ((baselineResult['inlier_fraction'] as num?)?.toDouble() ?? 0.1)
+                .clamp(0.0, 1.0);
+        final nInliers = math.max(4.0, inlierFrac * width);
+        return (rms / math.sqrt(nInliers) + 0.3).clamp(0.3, 1.5);
+      })();
+
       var uncertaintyResult = _calculateUncertainty(
         xs,
         ys,
@@ -2932,6 +2955,7 @@ class ImageProcessor {
         leftXAligned,
         rightXAligned,
         methodResults,
+        baselineSigmaPx: baselineSigmaPx,
       );
       double uncertainty = uncertaintyResult['combined'] ?? 1.0;
       double uncertaintyBootstrap = uncertaintyResult['bootstrap'] ?? 0.0;
@@ -2939,6 +2963,7 @@ class ImageProcessor {
           uncertaintyResult['method_disagreement'] ?? 0.0;
       double uncertaintyEdge = uncertaintyResult['edge'] ?? 0.5;
       double uncertaintyContact = uncertaintyResult['contact'] ?? 0.5;
+      double uncertaintyBaseline = uncertaintyResult['baseline'] ?? 0.3;
       final double uncertaintyCalibration =
           math.max(0.0, angleCalibration.residualStdDeg);
       if (uncertaintyCalibration > 0.0) {
@@ -3066,11 +3091,35 @@ $scaleCaution
         'angle_numeric': thetaFinal,
         'angle_left': thetaLeft,
         'angle_right': thetaRight,
+        // Measurement-regime QC flags (ISO 19403-2 practice; Vuckovac et al.
+        // Soft Matter 2019; ramé-hart baseline-tilt-to-zero convention).
+        'quality_flags': <String>[
+          if (thetaFinal >= 150.0)
+            'high_angle_regime: baseline sensitivity grows steeply above '
+                '150° (±1 px → up to ~8° near 180°); treat with caution',
+          if (thetaFinal <= 20.0)
+            'low_angle_regime: tangent placement is ambiguous below 20°',
+          if (baselineAngle.abs() > 2.0)
+            'stage_tilt: baseline tilt '
+                '${baselineAngle.toStringAsFixed(1)}° — level the stage '
+                '(angles are tilt-corrected but residual error grows)',
+          if (thetaLeft.isFinite &&
+              thetaRight.isFinite &&
+              (thetaLeft - thetaRight).abs() > 4.0)
+            'asymmetry: |θL−θR| = '
+                '${(thetaLeft - thetaRight).abs().toStringAsFixed(1)}° — '
+                'non-axisymmetric drop, contamination, or baseline error',
+          if (dropRadius.isFinite && dropRadius < 100.0)
+            'small_drop: contact half-width ${dropRadius.toStringAsFixed(0)} '
+                'px — errors scale inversely with drop pixel size; move '
+                'closer or crop tighter',
+        ],
         'uncertainty_numeric': uncertainty,
         'uncertainty_bootstrap': uncertaintyBootstrap,
         'uncertainty_method': uncertaintyMethodDisagreement,
         'uncertainty_edge': uncertaintyEdge,
         'uncertainty_contact': uncertaintyContact,
+        'uncertainty_baseline': uncertaintyBaseline,
         'uncertainty_calibration': uncertaintyCalibration,
         'theta_circle': _methodMetricOrNaN(methodResults, 'circle', 'angle'),
         'theta_ellipse': _methodMetricOrNaN(methodResults, 'ellipse', 'angle'),
@@ -3099,6 +3148,7 @@ $scaleCaution
         'baseline_tilt': baselineAngle,
         'baseline_slope': baselineSlope,
         'baseline_source': baselineResult['source'] ?? 'contour',
+        'baseline_method': baselineResult['baseline_method'] ?? 'legacy',
         'baseline_confidence':
             ((baselineResult['confidence'] as num?)?.toDouble() ?? 0.0)
                 .clamp(0.0, 1.0),

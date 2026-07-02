@@ -432,24 +432,13 @@ class AngleUtils {
 
       double deltaX = maxX - minX;
       double deltaY = maxY - minY;
-      bool fitXasFunctionOfY = deltaY > 1.2 * deltaX;
 
-      List<double> independent = [];
-      List<double> dependent = [];
       List<double> weights = [];
       final radialScale =
           ((contactSpan?.abs() ?? math.max(deltaX, deltaY)) * 0.25)
               .clamp(8.0, 72.0);
 
       for (final p in points) {
-        if (fitXasFunctionOfY) {
-          independent.add(p.y);
-          dependent.add(p.x);
-        } else {
-          independent.add(p.x);
-          dependent.add(p.y);
-        }
-
         if (useWeighting) {
           double dx = p.x - contactX;
           double dy = p.y - contactY;
@@ -460,6 +449,59 @@ class AngleUtils {
         } else {
           weights.add(1.0);
         }
+      }
+
+      // Fit in a frame ROTATED to the local tangent direction, so the profile
+      // is single-valued regardless of contact angle. Fitting y(x) (or x(y))
+      // in the image frame folds over wherever the tangent turns past the
+      // chosen axis inside the fit window — for steep flanks (θ ≥ ~120°) that
+      // fold is unavoidable and biases the fitted tangent several degrees low.
+      // The rotation angle comes from a weighted PCA of the same windowed
+      // points, which needs no parameterization at all.
+      double wSum = 0.0, mx = 0.0, my = 0.0;
+      for (int i = 0; i < points.length; i++) {
+        wSum += weights[i];
+        mx += weights[i] * points[i].x;
+        my += weights[i] * points[i].y;
+      }
+      if (wSum <= 1e-12) throw StateError('degenerate weights');
+      mx /= wSum;
+      my /= wSum;
+      double sxx = 0.0, syy = 0.0, sxy = 0.0;
+      for (int i = 0; i < points.length; i++) {
+        final dx = points[i].x - mx;
+        final dy = points[i].y - my;
+        sxx += weights[i] * dx * dx;
+        syy += weights[i] * dy * dy;
+        sxy += weights[i] * dx * dy;
+      }
+      final trace = sxx + syy;
+      final disc =
+          ((trace * trace) * 0.25 - (sxx * syy - sxy * sxy)).clamp(0.0, double.infinity);
+      final lambda = trace * 0.5 + math.sqrt(disc);
+      double ux, uy;
+      if (sxy.abs() > 1e-12) {
+        ux = lambda - syy;
+        uy = sxy;
+      } else if (sxx >= syy) {
+        ux = 1.0;
+        uy = 0.0;
+      } else {
+        ux = 0.0;
+        uy = 1.0;
+      }
+      final uNorm = math.sqrt(ux * ux + uy * uy);
+      if (!uNorm.isFinite || uNorm <= 1e-12) throw StateError('degenerate PCA');
+      ux /= uNorm;
+      uy /= uNorm;
+      // Rotated coordinates: u along the tangent estimate, v orthogonal.
+      final independent = <double>[];
+      final dependent = <double>[];
+      for (final p in points) {
+        final dx = p.x - contactX;
+        final dy = p.y - contactY;
+        independent.add(dx * ux + dy * uy);
+        dependent.add(-dx * uy + dy * ux);
       }
 
       int maxDegree = math.min(5, degree);
@@ -477,24 +519,23 @@ class AngleUtils {
         final xScale = fit['x_scale']! as double;
         final fitRSquared = fit['r_squared']! as double;
 
-        final contactIndependent = fitXasFunctionOfY ? contactY : contactX;
-        final normalizedContact = (contactIndependent - xMean) / xScale;
+        // Contact point is the rotated-frame origin by construction.
+        final normalizedContact = (0.0 - xMean) / xScale;
         final slopeLocal =
             _evaluatePolynomialDerivative(coeffs, normalizedContact) / xScale;
-
-        double dyDx;
-        if (fitXasFunctionOfY) {
-          if (slopeLocal.abs() < 1e-8) {
-            dyDx = slopeLocal >= 0 ? 1e8 : -1e8;
-          } else {
-            dyDx = 1.0 / slopeLocal;
-          }
-        } else {
-          dyDx = slopeLocal;
+        if (!slopeLocal.isFinite) {
+          return {
+            'angle': double.nan,
+            'r_squared': 0.0,
+            'fit_degree': requestedDegree.toDouble(),
+          };
         }
+        // Tangent (1, slopeLocal) in the rotated frame, mapped back.
+        final tx = ux - slopeLocal * uy;
+        final ty = uy + slopeLocal * ux;
 
         return {
-          'angle': _contactAngleFromSlope(dyDx, isLeftSide),
+          'angle': _contactAngleFromTangentVector(tx, ty, isLeftSide),
           'r_squared': fitRSquared,
           'fit_degree': requestedDegree.toDouble(),
         };
@@ -797,13 +838,6 @@ class AngleUtils {
       xPow *= x;
     }
     return acc;
-  }
-
-  static double _contactAngleFromSlope(double dyDx, bool isLeftSide) {
-    if (!dyDx.isFinite) {
-      return 90.0;
-    }
-    return _contactAngleFromTangentVector(1.0, dyDx, isLeftSide);
   }
 
   static double _contactAngleFromTangentVector(

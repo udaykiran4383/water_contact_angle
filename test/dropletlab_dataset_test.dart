@@ -108,5 +108,17 @@ void main() {
     // The pipeline should at least PRODUCE an angle for most real images.
     expect(measured, greaterThan((images.length * 0.6).floor()),
         reason: 'pipeline failed to measure too many dataset images');
+    // Regression gate for the glossy-substrate baseline work (step baseline,
+    // junction corner/mirror-axis/vertical-run, component-selector and YL
+    // degenerate-fit fixes, 2026-07-02): labelled MAE 21.15 → 7.3 over 16
+    // transcribed reference labels. Remaining error is dominated by the
+    // glycerol "shadow skirt" family (dark halo between drop and front edge
+    // defeats trace-geometry signals — needs a mirrored-model image-energy
+    // fit). Gate with margin so improvements land and regressions fail.
+    if (allErrs.isNotEmpty) {
+      final mae = allErrs.reduce((a, b) => a + b) / allErrs.length;
+      expect(mae, lessThanOrEqualTo(10.0),
+          reason: 'DropletLab labelled MAE regressed: $mae');
+    }
   });
 }

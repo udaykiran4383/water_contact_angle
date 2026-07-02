@@ -72,6 +72,11 @@ class ResultCard extends StatelessWidget {
     final uncBootstrap = _d('uncertainty_bootstrap');
     final uncMethod = _d('uncertainty_method');
     final uncEdge = _d('uncertainty_edge');
+    final uncBaseline = _d('uncertainty_baseline');
+
+    // Measurement-regime QC flags from the pipeline
+    final qualityFlags =
+        (results['quality_flags'] as List?)?.cast<String>() ?? const <String>[];
 
     // If result is an error, show error text
     if (text.startsWith('❌')) {
@@ -257,6 +262,43 @@ class ResultCard extends StatelessWidget {
                 'Edge precision',
                 'Pixel-level accuracy of detected drop boundary',
                 Colors.purpleAccent,
+              ),
+            if (uncBaseline.isFinite)
+              _uncertaintyRow(
+                '±${_fmtNum(uncBaseline)}°',
+                'Baseline placement',
+                'Sensitivity of the angle to where the surface line sits '
+                    '(dominates near 180°)',
+                Colors.tealAccent,
+              ),
+            const SizedBox(height: 16),
+          ],
+
+          // ═══════════ Measurement QC flags ═══════════
+          if (qualityFlags.isNotEmpty) ...[
+            _sectionLabel('Measurement Warnings'),
+            const SizedBox(height: 8),
+            for (final flag in qualityFlags)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Icon(Icons.warning_amber_rounded,
+                        color: Colors.amberAccent, size: 15),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        flag,
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.65),
+                          fontSize: 11.5,
+                          height: 1.35,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             const SizedBox(height: 16),
           ],

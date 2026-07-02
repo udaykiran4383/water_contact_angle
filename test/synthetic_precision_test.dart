@@ -32,7 +32,10 @@ const int _kBg = 235; // bright back-light
 /// Optional [tiltDeg] rotates the whole scene about the drop apex to emulate a
 /// non-level stage; [noiseSigma] adds Gaussian sensor noise.
 img.Image _renderCap(double thetaDeg,
-    {double tiltDeg = 0.0, double noiseSigma = 0.0, int seed = 1}) {
+    {double tiltDeg = 0.0,
+    double noiseSigma = 0.0,
+    int seed = 1,
+    int blurRadius = 0}) {
   final theta = thetaDeg * math.pi / 180.0;
   // Analytic geometry (math y-up, baseline at Y=0): circle center height above
   // the baseline is h = -R*cos(theta); contact half-width a = R*sin(theta).
@@ -81,6 +84,10 @@ img.Image _renderCap(double thetaDeg,
       out.setPixelRgb(xx, yy, g, g, g);
     }
   }
+  // Simulated defocus: symmetric blur AFTER anti-aliased rendering. The true
+  // geometric edge remains at the 50%-coverage crossing for a straight edge;
+  // any residual bias exposes curvature/asymmetric-blur weaknesses.
+  if (blurRadius > 0) return img.gaussianBlur(out, radius: blurRadius);
   return out;
 }
 
@@ -106,7 +113,9 @@ void main() {
 
   test('synthetic spherical-cap contact-angle recovery (clean)',
       timeout: const Timeout(Duration(minutes: 5)), () async {
-    final angles = [95.0, 105.0, 115.0, 125.0, 135.0, 145.0];
+    // 60–85° covers the hydrophilic regime (no overhang, contacts at the
+    // widest row); 95–145° the hydrophobic regime the PFOTES rig targets.
+    final angles = [60.0, 75.0, 85.0, 95.0, 105.0, 115.0, 125.0, 135.0, 145.0];
     final rows = <String>['theta_true,ensemble,err,yl,circle,poly,ellipse'];
     double sumErr = 0, maxErr = 0, sumYlErr = 0;
     int n = 0, nYl = 0;
@@ -145,11 +154,12 @@ void main() {
 
     expect(n, angles.length, reason: 'pipeline failed on some synthetic caps');
     // On perfect, noise-free geometry the pipeline must be near-exact. These
-    // bounds lock in the sub-pixel-edge + working circle/ellipse/ADSA ensemble
-    // (observed MAE ~0.22 deg, max ~0.47 deg) against regression.
-    expect(mae, lessThanOrEqualTo(0.6),
+    // bounds lock in the precision round-3 state (rotated-frame polynomial
+    // tangent, tilted-baseline contour completion, ADSA contact-zone
+    // exclusion; observed MAE ~0.09 deg, max ~0.17 deg) against regression.
+    expect(mae, lessThanOrEqualTo(0.25),
         reason: 'synthetic MAE regressed: $mae');
-    expect(maxErr, lessThanOrEqualTo(1.0),
+    expect(maxErr, lessThanOrEqualTo(0.5),
         reason: 'synthetic max error regressed: $maxErr');
   });
 
@@ -163,6 +173,9 @@ void main() {
       'tilt-4_130': _renderCap(130, tiltDeg: -4),
       'small_R_115': _renderCapSmall(115, 65),
       'small_R_140': _renderCapSmall(140, 65),
+      'blur2_125': _renderCap(125, blurRadius: 2),
+      'blur3_140': _renderCap(140, blurRadius: 3),
+      'blur2_75': _renderCap(75, blurRadius: 2),
     };
     final truth = <String, double>{
       'noise4_115': 115,
@@ -172,6 +185,9 @@ void main() {
       'tilt-4_130': 130,
       'small_R_115': 115,
       'small_R_140': 140,
+      'blur2_125': 125,
+      'blur3_140': 140,
+      'blur2_75': 75,
     };
     final rows = <String>['case,theta_true,ensemble,err,yl,circle,poly,ellipse'];
     double sumErr = 0, maxErr = 0;
@@ -200,9 +216,10 @@ void main() {
     print(rows.join('\n'));
 
     expect(n, cases.length, reason: 'pipeline failed on some stress cases');
-    // Observed stress MAE ~0.51 deg, worst (+5 deg tilt) ~1.76 deg. Lock in.
-    expect(mae, lessThanOrEqualTo(1.0), reason: 'stress MAE regressed: $mae');
-    expect(maxErr, lessThanOrEqualTo(2.5),
+    // Precision round 3 (+ sub-pixel baseline): observed stress MAE ~0.13,
+    // worst ~0.32 (small_R_140, ellipse). Lock in with ~2x margin.
+    expect(mae, lessThanOrEqualTo(0.3), reason: 'stress MAE regressed: $mae');
+    expect(maxErr, lessThanOrEqualTo(0.7),
         reason: 'stress max error regressed: $maxErr');
   });
 }

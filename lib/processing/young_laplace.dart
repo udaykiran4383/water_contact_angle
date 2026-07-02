@@ -131,6 +131,30 @@ class YoungLaplaceSolver {
     var pts = contour.where((p) => p.y < baselineY - 1.0).toList();
     if (pts.length < 8) return fail;
 
+    // Contact-zone exclusion (ADSA-NA / selected-plane practice; Cabezas et
+    // al., Vuckovac et al. Soft Matter 2019): the band just above the contact
+    // line is optically distorted (blur, meniscus, residual reflection), so
+    // those pixels must not steer the fit. The Laplacian shape is fully
+    // determined by the clean apex/mid profile; we fit that and read the
+    // angle by EXTRAPOLATING the fitted profile down to the true baseline
+    // (which `_angleAtHeight(profile, zContact)` below already does).
+    // The band is a FIXED few pixels — the scale of this instrument's optical
+    // blur — not a fraction of drop height: a proportional band (5% of h) was
+    // measured to be strictly worse on both the known-truth synthetic caps
+    // and the PFOTES reference set, because it discards clean profile.
+    {
+      final minYAll = pts.map((p) => p.y).reduce(math.min);
+      final h = baselineY - minYAll;
+      if (h > 30.0) {
+        const exclusion = 2.0;
+        final kept =
+            pts.where((p) => p.y < baselineY - exclusion).toList();
+        // Never starve the fit: keep the exclusion only when plenty of clean
+        // profile remains.
+        if (kept.length >= 40) pts = kept;
+      }
+    }
+
     // Subsample to bound the optimisation cost while preserving both flanks.
     pts = _subsample(pts, 180);
 
@@ -184,6 +208,20 @@ class YoungLaplaceSolver {
     final theta = _angleAtHeight(profile, zContact);
     if (!theta.isFinite) return fail;
 
+    // Physical sanity: a sessile profile of height h and contact half-width a
+    // has θ ≥ 2·atan(h/a) up to gravity flattening (equality for a spherical
+    // cap; gravity only makes the contact steeper relative to the cap
+    // estimate). A fitted θ far BELOW that bound is a degenerate solution —
+    // typically a near-flat huge-b profile whose b-normalised residual looks
+    // spuriously tiny — and must not reach the ensemble as "authoritative".
+    {
+      final hData = baselineY - minY;
+      final aData = math.max(1e-6, (rightX - leftX) / 2.0);
+      final capTheta =
+          2.0 * math.atan(hData / aData) * 180.0 / math.pi;
+      if (theta < 0.6 * capTheta) return fail;
+    }
+
     // Goodness of fit: geometric R² from orthogonal residuals.
     final stats = _residualStats(profile, ex, ey, b, x0, z0);
     final rmsPx = stats.rms;
@@ -209,6 +247,12 @@ class YoungLaplaceSolver {
       'bond_number': beta,
       'residual': residualNorm.isFinite ? residualNorm : double.infinity,
       'r_squared': rSquared,
+      // Conditioning flag (Zuo et al. Langmuir 2017; Cabezas shape parameter):
+      // as the shape Bond number → 0 the Young–Laplace profile degenerates to
+      // a spherical cap, so beta (and any derived surface tension) becomes
+      // unidentifiable — the CONTACT ANGLE is still valid, but YL then carries
+      // no information beyond the circle fit. 1.0 = degenerate/low-Bond.
+      'low_bond_degenerate': beta < 0.05 ? 1.0 : 0.0,
     };
   }
 

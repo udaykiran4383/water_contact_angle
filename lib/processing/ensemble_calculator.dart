@@ -225,7 +225,8 @@ Map<String, double> _calculateUncertainty(
     double baselineY,
     double leftX,
     double rightX,
-    Map<String, Map<String, dynamic>> methodResults) {
+    Map<String, Map<String, dynamic>> methodResults,
+    {double baselineSigmaPx = 0.5}) {
   // 1. Bootstrap uncertainty with multi-model sampling.
   //
   // Contour points are NOT independent: neighbouring edge samples share the
@@ -335,12 +336,27 @@ Map<String, double> _calculateUncertainty(
   final contactUncertainty =
       (0.15 + 1.65 * (1.0 - bestContactConf)).clamp(0.15, 1.8);
 
-  // 5. Combined uncertainty (quadrature).
+  // 5. Baseline-placement sensitivity — the dominant error source in
+  // goniometry (Vuckovac et al., Soft Matter 2019: ±1 px of baseline ≈ 0.5°
+  // for θ < 150°, growing to ~8° as θ → 180°). For a circular cap the
+  // relation is exact: cos α = h/r with the contact half-width a = r·sin θ,
+  // so dθ/d(baseline) = 1/(r·sin θ) = 1/a rad per pixel — reproducing both
+  // the plateau and the θ→180° blow-up. σ_baseline comes from the baseline
+  // fit quality (caller), floored at a conservative sub-pixel value.
+  double baselineUncertainty = 0.3;
+  if (methodAngles.isNotEmpty && dropRadius > 5.0) {
+    final degPerPx = (1.0 / dropRadius) * 180.0 / math.pi;
+    baselineUncertainty =
+        (degPerPx * baselineSigmaPx.clamp(0.2, 2.0)).clamp(0.1, 12.0);
+  }
+
+  // 6. Combined uncertainty (quadrature).
   double combined = math.sqrt(
     bootstrapUncertainty * bootstrapUncertainty +
         methodDisagreement * methodDisagreement +
         edgeUncertainty * edgeUncertainty +
-        contactUncertainty * contactUncertainty,
+        contactUncertainty * contactUncertainty +
+        baselineUncertainty * baselineUncertainty,
   );
 
   combined = combined.clamp(0.25, 20.0);
@@ -351,6 +367,7 @@ Map<String, double> _calculateUncertainty(
     'method_disagreement': methodDisagreement,
     'edge': edgeUncertainty,
     'contact': contactUncertainty,
+    'baseline': baselineUncertainty,
   };
 }
 
